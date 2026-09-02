@@ -60,6 +60,7 @@ class ByteTrackTracker:
     def update(
         self,
         frame,
+        persist: bool = True,
     ) -> list[Detection]:
         """
         Run YOLO detection + ByteTrack on the
@@ -67,6 +68,12 @@ class ByteTrackTracker:
 
         Only one model inference is performed
         per frame.
+
+        persist=True keeps the track IDs between
+        frames. Passing persist=False on the first
+        frame of a new run resets the internal
+        ByteTrack state (used when the same YOLO
+        model object is reused across sessions).
         """
 
         results = self.model.track(
@@ -83,7 +90,7 @@ class ByteTrackTracker:
             iou=self.iou,
 
             # Keep track IDs between frames
-            persist=True,
+            persist=persist,
 
             # ByteTrack
             tracker=self.tracker,

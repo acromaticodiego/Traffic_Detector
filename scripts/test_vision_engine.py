@@ -282,8 +282,8 @@ def main():
     detector = YOLODetector(
         model_path=MODEL_PATH,
 
-        # Minimum detection confidence
-        confidence=0.70,
+        # Minimum detection confidence (matches the API default)
+        confidence=0.60,
 
         # IoU threshold
         iou=0.60,
@@ -299,7 +299,11 @@ def main():
     print("\nCreating tracker...")
 
     tracker = ByteTrackTracker(
-        model=detector.model
+        model=detector.model,
+        confidence=detector.confidence,
+        iou=detector.iou,
+        image_size=detector.image_size,
+        device=detector.device,
     )
 
     # ========================================================

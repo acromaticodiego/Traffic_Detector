@@ -116,12 +116,17 @@ class VisionEngine:
         frame,
         frame_id: int,
         timestamp: Optional[datetime] = None,
+        persist_tracks: bool = True,
     ) -> VisionResult:
         """
         Process one complete frame through the
         vision pipeline.
 
         YOLO + ByteTrack are executed only once.
+
+        persist_tracks=False on the first frame of a
+        run resets the ByteTrack state carried by the
+        shared YOLO model object.
         """
 
         if timestamp is None:
@@ -151,7 +156,8 @@ class VisionEngine:
         """
 
         tracked_detections = self.tracker.update(
-            frame
+            frame,
+            persist=persist_tracks,
         )
 
         # ======================================

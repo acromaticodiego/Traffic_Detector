@@ -22,3 +22,8 @@ class IncidentCandidate:
     # Bounding box that contains all objects
     # involved in the incident.
     bbox: Optional[dict[str, float]] = None
+
+    # Stable id for the incident. Overlapping detections of the
+    # same real event share this id, so clients upsert instead of
+    # accumulating duplicates.
+    incident_id: Optional[str] = None

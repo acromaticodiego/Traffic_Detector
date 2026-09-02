@@ -1,0 +1,17 @@
+# Vision service - API layer
+# Pins match what is already installed in the repo .venv.
+
+fastapi==0.141.1
+uvicorn==0.52.4
+websockets>=13            # required by uvicorn for WebSocket support
+
+# Vision pipeline
+ultralytics==8.4.129
+opencv-python==5.0.0.93
+torch==2.11.0
+torchvision==0.26.0
+numpy==2.5.2
+
+# Support
+pydantic==2.13.4
+python-multipart==0.0.32
