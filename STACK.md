@@ -62,6 +62,10 @@ trabajo use **exactamente las mismas versiones** y no introduzca incompatibilida
 | **torchvision** | **0.26.0+cu128** | Pareja de torch. Mismo major.minor que torch. |
 | **numpy** | **2.5.2** | numpy 2.x (ojo con libs que aún piden <2). |
 | **python-multipart** | **0.0.32** | Uploads/formularios en FastAPI. |
+| **sqlalchemy** | **2.0.52** | ORM, estilo declarativo 2.0 (`Mapped[]` / `mapped_column`). No usar la API 1.x de `Query`. |
+| **alembic** | **1.19.1** | Migraciones. Toma la URL de `VISION_DATABASE_URL`, no de `alembic.ini`. |
+| **psycopg[binary]** | **3.3.5** | Driver de PostgreSQL. ⚠️ Es psycopg **3**: la URL debe llevar `postgresql+psycopg://`; sin ese sufijo SQLAlchemy busca psycopg2 y falla. |
+| **PostgreSQL** | **18.x** | Servidor. Se usan columnas `JSONB`, así que 9.4+ como mínimo real. |
 
 ### Reglas del backend
 
@@ -69,6 +73,12 @@ trabajo use **exactamente las mismas versiones** y no introduzca incompatibilida
 - **ultralytics fijo**: si se sube, revisar `ByteTrackTracker` (usa `model.track(persist=...)`).
 - El modelo (`models/detectorfinal.pt`) y los videos NO van a git (ver `.gitignore`).
 - Instalación: `pip install -r services/vision_service/requirements.txt`.
+- **La base de datos nunca puede bloquear la visión.** El motor lleva
+  `connect_timeout=3`: sin él, un host inalcanzable no falla, se queda colgado, y
+  el respaldo a `cameras.yaml` nunca llega a ejecutarse. No quitarlo.
+- Tras cambiar un modelo ORM: `alembic revision --autogenerate` y **revisar** el
+  archivo generado antes de aplicarlo — el autogenerate ve un renombrado como un
+  borrar + crear, y eso pierde datos.
 
 ---
 
