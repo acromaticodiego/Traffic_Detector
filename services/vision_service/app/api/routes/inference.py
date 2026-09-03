@@ -4,14 +4,18 @@ the burned-in video.
 
 Protocol (server -> client):
 
-    {"type": "meta",     "fps", "frame_count", "width", "height", "stride"}
+    {"type": "meta",     "camera", "fps", "frame_count", "width", "height", "stride"}
     {"type": "frame",    "frame_id", "t", "tracks":[...], "incidents":[...], "events":[...]}
     {"type": "incident", "incident_type", "confidence", "track_ids", "bbox", "data", "t"}
     {"type": "done",     "frames", "processed"}
     {"type": "error",    "message"}
 
-Only one session runs at a time; a new connection
-cancels the previous one.
+The camera is chosen with ?camera=<id> (see cameras.yaml); omitting it
+takes the first one in the registry.
+
+Still only one session at a time, whatever the camera: ByteTrack keeps its
+state on the shared YOLO model, so two concurrent sessions would corrupt each
+other's tracks. Switching camera therefore restarts the pipeline.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..cameras import get_camera
 from ..session import VideoSession
 
 router = APIRouter(tags=["inference"])
@@ -50,12 +55,21 @@ async def inference_ws(websocket: WebSocket) -> None:
     loop = asyncio.get_running_loop()
     stride = _parse_stride(websocket)
 
+    try:
+        camera = get_camera(websocket.query_params.get("camera"))
+    except KeyError as unknown:
+        await websocket.send_json(
+            {"type": "error", "message": f"Cámara desconocida: {unknown.args[0]}"}
+        )
+        await websocket.close()
+        return
+
     async with _lock:
         if _active is not None:
             await asyncio.to_thread(_active.stop)
             _active = None
 
-        session = VideoSession(detector, loop, stride)
+        session = VideoSession(detector, loop, camera, stride)
 
         try:
             meta = session.open()

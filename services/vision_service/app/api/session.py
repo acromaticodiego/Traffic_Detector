@@ -26,8 +26,12 @@ from typing import Any, Optional
 import cv2
 
 from ..detection.detector import YOLODetector
+from .cameras import Camera
 from .config import settings
+from .road_roi import build_road_roi
 from .pipeline import build_vision_engine
+from .protocol import PROTOCOL_VERSION
+from ..db.incident_writer import incident_writer
 from .serializers import event_to_dict, incident_to_dict, track_to_dict
 from .traffic_level import TrafficLevelEstimator
 
@@ -41,14 +45,26 @@ class VideoSession:
         self,
         detector: YOLODetector,
         loop: asyncio.AbstractEventLoop,
+        camera: Camera,
         stride: Optional[int] = None,
     ):
         self._detector = detector
         self._loop = loop
+        self._camera = camera
         self._stride = max(1, stride or settings.frame_stride)
 
         self._engine = build_vision_engine(detector)
-        self._traffic = TrafficLevelEstimator()
+
+        # Every scene knob comes from the camera, not from the global config:
+        # two cameras in the same deployment have different geometry, so
+        # sharing one ROI or one threshold gives one of them a wrong level.
+        self._traffic = TrafficLevelEstimator(
+            roi=build_road_roi(camera.roi, camera.perspective),
+            medium=camera.occupancy_medium,
+            high=camera.occupancy_high,
+            free_speed=camera.free_speed,
+            stride=self._stride,
+        )
         self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
             maxsize=_QUEUE_MAXSIZE
         )
@@ -72,16 +88,18 @@ class VideoSession:
         Raises FileNotFoundError / RuntimeError on failure.
         """
 
-        if not settings.video_path.exists():
+        source = self._camera.source
+
+        if not source.exists():
             raise FileNotFoundError(
-                f"Video not found: {settings.video_path}"
+                f"Fuente no encontrada para '{self._camera.id}': {source}"
             )
 
-        cap = cv2.VideoCapture(str(settings.video_path))
+        cap = cv2.VideoCapture(str(source))
 
         if not cap.isOpened():
             raise RuntimeError(
-                f"Could not open video: {settings.video_path}"
+                f"No se pudo abrir la fuente de '{self._camera.id}': {source}"
             )
 
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -95,20 +113,32 @@ class VideoSession:
         self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+        self._traffic.configure(self.width, self.height, self.fps)
+
         return {
             "type": "meta",
+            # Lets the frontend notice it is talking to a service older than
+            # itself, instead of crashing on a field that is not there.
+            "protocol": PROTOCOL_VERSION,
+            "camera": self._camera.public(),
             "fps": self.fps,
             "frame_count": self.frame_count,
             "width": self.width,
             "height": self.height,
             "stride": self._stride,
             "traffic_thresholds": {
-                "medium": settings.traffic_medium,
-                "high": settings.traffic_high,
+                "medium": self._camera.occupancy_medium,
+                "high": self._camera.occupancy_high,
             },
+            # Normalized polygon of the drivable surface, so the frontend can
+            # draw it over the video while calibrating. null = whole frame.
+            "road_roi": self._traffic.roi.polygon,
         }
 
     def start(self) -> None:
+        incident_writer.reset_seen()
+        incident_writer.start()
+
         self._thread = threading.Thread(
             target=self._process_video,
             name="vision-session",
@@ -221,7 +251,10 @@ class VideoSession:
                     event_to_dict(ev) for ev in result.events
                 ]
 
-                traffic = self._traffic.update(result.tracks)
+                traffic = self._traffic.update(
+                    result.tracks,
+                    motion=result.motion,
+                )
 
                 self._put(
                     {
@@ -235,6 +268,10 @@ class VideoSession:
                             "level": traffic.level,
                             "vehicles": traffic.vehicles,
                             "people": traffic.people,
+                            "occupancy": traffic.occupancy,
+                            "mean_speed": traffic.mean_speed,
+                            "speed_ratio": traffic.speed_ratio,
+                            "stopped": traffic.stopped,
                             "score": traffic.score,
                         },
                     }
@@ -243,6 +280,10 @@ class VideoSession:
                 # emit incidents also as standalone messages
                 for inc in incidents_payload:
                     self._put({"type": "incident", **inc})
+                    # Queued, never written inline: the vision loop must not
+                    # wait on Postgres. Repeats of the same incident across
+                    # frames are dropped by the writer.
+                    incident_writer.submit(self._camera.id, inc, frame_id)
 
         except Exception as error:  # noqa: BLE001
             self._put({"type": "error", "message": str(error)})
