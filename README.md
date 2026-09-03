@@ -85,6 +85,8 @@ Conteo de vehículos activos por frame con suavizado EMA → `bajo` / `medio` / 
 (umbrales configurables).
 └── README.md
 ```
+Imagen del funcionamiento
+<img width="1917" height="1028" alt="image" src="https://github.com/user-attachments/assets/c59d558c-1c4a-4106-947c-42972a250b59" />
+<img width="1916" height="1030" alt="image" src="https://github.com/user-attachments/assets/0686ac31-cc8d-4ee2-9c25-5eb39be9cf52" />
 
-<img width="1912" height="1025" alt="image" src="https://github.com/user-attachments/assets/f0f327de-04ce-4e3a-be16-82c39a488446" />
 
