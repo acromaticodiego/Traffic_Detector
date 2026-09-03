@@ -56,6 +56,22 @@ o el atajo:
 | `VISION_CORS_ORIGINS` | `*` (lista separada por comas) |
 | `VISION_HOST` / `VISION_PORT` | `0.0.0.0` / `8000` (solo con el atajo `-m`) |
 
+## Diagnóstico
+
+Si el servicio responde pero se comporta como una versión distinta a la del
+código, comprobar que no haya **dos procesos** escuchando en el puerto: Windows
+permite que convivan uno atado a `127.0.0.1` y otro a `0.0.0.0`, y el enlace
+específico gana para las conexiones a `localhost`, de modo que reiniciar puede
+estar deteniendo siempre al proceso equivocado.
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -State Listen |
+  Select-Object OwningProcess, LocalAddress
+```
+
+`GET /health` devuelve `protocol`, `camera_registry` y `config_fingerprint`:
+dos procesos con huellas distintas significan que uno está desactualizado.
+
 ## Nivel de tráfico
 
 No se calcula contando vehículos: el conteo no sabe qué tan grande es la vía,
