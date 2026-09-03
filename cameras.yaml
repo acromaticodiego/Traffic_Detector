@@ -1,0 +1,43 @@
+# Registro de cámaras.
+#
+# Cada cámara trae su propia calibración porque depende del ángulo y del
+# encuadre: la ROI y los umbrales de una NO sirven para otra.
+#
+#   roi          -> lo que imprime  scripts/roi_picker.py --camera <id>
+#   thresholds   -> lo que imprime  scripts/traffic_calibrate.py --camera <id>
+#
+# `source` puede ser una ruta relativa a la raíz del repo o, en producción,
+# una URL RTSP.
+
+cameras:
+  - id: cra64c_cl78
+    name: "Cra 64C × Cl 78"
+    source: "videos/input/Grabación 2026-08-26 142508.mp4"
+    lat: 6.2716
+    lng: -75.5900
+    # Dos calzadas, sin el separador de concreto del medio.
+    roi: "0.0021,0.9891 0.0031,0.5043 0.3075,0.0065 0.4655,0.0087 0.3316,0.9935 0.4446,0.9978 0.4833,0.0043 0.6056,0.0000 0.9927,0.7739 0.9937,0.9891"
+    perspective: 2.5
+    thresholds:
+      occupancy_medium: 0.24
+      occupancy_high: 0.41
+      free_speed: 0.065
+    notes: "Calibrada con los frames 0-400 del clip de demo."
+
+  - id: cra55_cl37
+    name: "Cra 55 × Cl 37"
+    # El clip de demo cambia de cámara en el frame 569, así que por ahora
+    # las dos entradas apuntan al mismo archivo.
+    source: "videos/input/Grabación 2026-08-26 142508.mp4"
+    lat: 6.2442
+    lng: -75.5812
+    # PROVISIONAL: es la ROI de la otra cámara. Encaja aproximadamente, pero
+    # la franja excluida cae sobre un carril real. Redibujar con:
+    #   scripts/roi_picker.py --camera cra55_cl37 --frame 900
+    roi: "0.0021,0.9891 0.0031,0.5043 0.3075,0.0065 0.4655,0.0087 0.3316,0.9935 0.4446,0.9978 0.4833,0.0043 0.6056,0.0000 0.9927,0.7739 0.9937,0.9891"
+    perspective: 2.5
+    thresholds:
+      occupancy_medium: 0.18
+      occupancy_high: 0.32
+      free_speed: 0.060
+    notes: "Calibrada con los frames 600-1400. ROI provisional, falta redibujarla."

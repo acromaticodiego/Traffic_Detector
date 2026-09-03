@@ -1,8 +1,10 @@
 """
-Serve the burned-in demo video and its metadata.
+Serve a camera's source video and its metadata.
 
-GET /api/video       -> the raw mp4 (supports HTTP Range, needed for <video> seek)
-GET /api/video/meta  -> fps / dimensions / frame count / duration
+GET /api/video?camera=<id>       -> the raw mp4 (HTTP Range, needed for <video> seek)
+GET /api/video/meta?camera=<id>  -> fps / dimensions / frame count / duration
+
+Omitting `camera` falls back to the first camera in the registry.
 """
 
 from __future__ import annotations
@@ -13,31 +15,42 @@ import cv2
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
-from ..config import settings
+from ..cameras import Camera, get_camera
 
 router = APIRouter(prefix="/api/video", tags=["video"])
 
-# cache keyed on the file's modification time, so replacing the video
-# (even with the same name) is picked up without a restart
-_meta_cache: dict | None = None
-_meta_mtime: float | None = None
+# Keyed by camera id and the file's modification time, so replacing a source
+# (even with the same name) is picked up without a restart, and two cameras
+# never hand each other the wrong dimensions.
+_meta_cache: dict[str, tuple[float, dict]] = {}
 
 
-def _read_meta() -> dict:
-    global _meta_cache, _meta_mtime
-
-    if not settings.video_path.exists():
+def _resolve(camera_id: str | None) -> Camera:
+    try:
+        camera = get_camera(camera_id)
+    except KeyError:
         raise HTTPException(
-            status_code=404,
-            detail=f"Video not found: {settings.video_path}",
+            status_code=404, detail=f"Cámara desconocida: {camera_id}"
         )
 
-    mtime = settings.video_path.stat().st_mtime
+    if not camera.source.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Fuente no encontrada para '{camera.id}': {camera.source}",
+        )
 
-    if _meta_cache is not None and _meta_mtime == mtime:
-        return _meta_cache
+    return camera
 
-    cap = cv2.VideoCapture(str(settings.video_path))
+
+def _read_meta(camera: Camera) -> dict:
+
+    mtime = camera.source.stat().st_mtime
+    cached = _meta_cache.get(camera.id)
+
+    if cached and cached[0] == mtime:
+        return cached[1]
+
+    cap = cv2.VideoCapture(str(camera.source))
 
     if not cap.isOpened():
         raise HTTPException(status_code=500, detail="Could not open video")
@@ -53,39 +66,37 @@ def _read_meta() -> dict:
 
     cap.release()
 
-    _meta_cache = {
-        "filename": settings.video_path.name,
+    meta = {
+        "camera": camera.id,
+        "filename": camera.source.name,
         "fps": float(fps),
         "frame_count": frame_count,
         "width": width,
         "height": height,
         "duration": round(frame_count / fps, 3) if fps else None,
     }
-    _meta_mtime = mtime
 
-    return _meta_cache
+    _meta_cache[camera.id] = (mtime, meta)
+
+    return meta
 
 
 @router.get("/meta")
-def video_meta() -> dict:
-    return _read_meta()
+def video_meta(camera: str | None = None) -> dict:
+    return _read_meta(_resolve(camera))
 
 
 @router.get("")
-def video_file() -> FileResponse:
+def video_file(camera: str | None = None) -> FileResponse:
 
-    if not settings.video_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Video not found: {settings.video_path}",
-        )
+    source = _resolve(camera).source
 
     # no-cache => the browser revalidates every time (ETag/Last-Modified from
     # the file stat), so swapping the video is reflected on a plain refresh
     # instead of serving a stale cached copy under the same URL.
     return FileResponse(
-        path=settings.video_path,
+        path=source,
         media_type="video/mp4",
-        filename=settings.video_path.name,
+        filename=source.name,
         headers={"Cache-Control": "no-cache"},
     )

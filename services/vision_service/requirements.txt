@@ -12,6 +12,11 @@ torch==2.11.0
 torchvision==0.26.0
 numpy==2.5.2
 
+# Persistence
+sqlalchemy==2.0.52
+alembic==1.19.1
+psycopg[binary]==3.3.5
+
 # Support
 pydantic==2.13.4
 python-multipart==0.0.32
