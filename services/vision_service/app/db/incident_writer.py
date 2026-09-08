@@ -120,7 +120,27 @@ class IncidentWriter:
                 self._write(item)
             except Exception as error:  # noqa: BLE001
                 self.failed += 1
-                logger.warning("No se pudo guardar el incidente: %s", error)
+
+                if self.failed == 1:
+                    # El primer fallo se grita, no se susurra: si la tabla
+                    # `cameras` está vacía —se migró pero no se corrió
+                    # scripts/seed_cameras.py— la clave foránea rechaza TODOS
+                    # los incidentes y el servicio sigue funcionando de lo más
+                    # normal, así que el histórico se pierde entero sin que
+                    # nadie se entere hasta que va a consultarlo.
+                    logger.error(
+                        "No se pudo guardar el incidente: %s. Si el error es "
+                        "de clave foránea, la cámara no existe en la tabla "
+                        "`cameras`: correr scripts/seed_cameras.py. Los "
+                        "incidentes siguientes solo se avisarán cada 50.",
+                        error,
+                    )
+                elif self.failed % 50 == 0:
+                    logger.warning(
+                        "%d incidentes sin guardar; último error: %s",
+                        self.failed,
+                        error,
+                    )
 
     def _write(self, item: tuple[str, dict[str, Any], int]) -> None:
         from .models import IncidentRow
@@ -142,6 +162,7 @@ class IncidentWriter:
                     track_ids=list(incident.get("track_ids") or []),
                     bbox=dict(bbox) if isinstance(bbox, dict) else bbox,
                     data=incident.get("data") or {},
+                    evidence_path=incident.get("evidence_path"),
                 )
             )
 

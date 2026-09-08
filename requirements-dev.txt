@@ -14,3 +14,12 @@ ruff==0.16.6
 # Dependencias ligeras que sí importan los módulos bajo prueba.
 numpy==2.5.2
 PyYAML==6.0.3
+
+# Las rutas de la API y los modelos ORM. Entran aquí porque el guardia de
+# rutas de la evidencia —el que impide que un `../../../.env` salga servido
+# por HTTP— no se puede probar sin importarlas, y un guardia de seguridad sin
+# test es un guardia que nadie sabe si sigue en pie. Son segundos de
+# instalación, no los gigas de torch: la regla sigue siendo excluir el stack
+# de ML, no todo lo que no sea la librería estándar.
+fastapi==0.141.1
+sqlalchemy==2.0.52

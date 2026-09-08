@@ -54,6 +54,11 @@ o el atajo:
 | `VISION_TRAFFIC_SLOW_RATIO` | `0.35` (por debajo de esta fracción del flujo libre, el vehículo cuenta como detenido) |
 | `VISION_TRAFFIC_SMOOTHING` | `0.2` (EMA de ocupación y velocidad; mayor = reacciona más rápido) |
 | `VISION_CORS_ORIGINS` | `*` (lista separada por comas) |
+| `GEMINI_API_KEY` | vacío. Sin ella no se ofrece el resumen con IA; el resto del panel funciona igual |
+| `GEMINI_MODEL` | `gemini-2.5-flash` |
+| `GEMINI_TIMEOUT` | `30` segundos |
+| `VISION_EVIDENCE` | `1`. En `0` no se guardan imágenes: los incidentes quedan en la tabla sin nada con qué auditarlos |
+| `VISION_EVIDENCE_DIR` | `outputs/incidents`. Por cada incidente se escriben dos JPEG en `<dir>/<cámara>/<id-incidente>_<frame>/`; el directorio crece sin límite |
 | `VISION_HOST` / `VISION_PORT` | `0.0.0.0` / `8000` (solo con el atajo `-m`) |
 
 ## Nivel de tráfico

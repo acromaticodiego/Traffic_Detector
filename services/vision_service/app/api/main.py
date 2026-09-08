@@ -103,5 +103,10 @@ def health() -> dict:
         "database": redact_url(settings.database_url),
         "incidents_written": incident_writer.written,
         "incidents_dropped": incident_writer.dropped,
+        # Rechazados por la base (típicamente la clave foránea, cuando la
+        # cámara no está en la tabla `cameras`). Se muestra junto a los otros
+        # dos porque un servicio que detecta bien y no persiste nada se ve
+        # perfectamente sano desde afuera si este número no está.
+        "incidents_failed": incident_writer.failed,
         "config_fingerprint": config_fingerprint(),
     }

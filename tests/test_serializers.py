@@ -10,6 +10,7 @@ import json
 
 import numpy as np
 
+from services.vision_service.app.api.config import REPO_ROOT
 from services.vision_service.app.api.serializers import (
     incident_to_dict,
     track_to_dict,
@@ -90,6 +91,36 @@ class TestIncidente:
         )
 
         assert incident_to_dict(incident)["t"] is None
+
+    def test_la_evidencia_viaja_relativa_a_la_raiz_del_repo(self):
+        # Absoluta filtraría el árbol de directorios del servidor al
+        # navegador, y dejaría de resolver apenas el despliegue cambie de
+        # máquina: la misma fila apuntando a un disco que ya no existe.
+        absoluta = REPO_ROOT / "outputs" / "incidents" / "cam1" / "col-1-2_42"
+
+        incident = IncidentCandidate(
+            incident_type="possible_collision",
+            track_ids=[1, 2],
+            confidence=0.9,
+            data={"evidence_path": str(absoluta / "annotated.jpg")},
+        )
+
+        data = incident_to_dict(incident)
+
+        assert data["evidence_path"] == (
+            "outputs/incidents/cam1/col-1-2_42/annotated.jpg"
+        )
+
+    def test_un_incidente_sin_evidencia_viaja_como_null(self):
+        # Pasa siempre que VISION_EVIDENCE esté apagada, y en todo incidente
+        # anterior a que existiera la captura.
+        incident = IncidentCandidate(
+            incident_type="vehiculo_detenido",
+            track_ids=[1],
+            confidence=0.85,
+        )
+
+        assert incident_to_dict(incident)["evidence_path"] is None
 
     def test_los_escalares_de_numpy_no_rompen_el_json(self):
         # El motor mete valores calculados con numpy en `data`; json.dumps no

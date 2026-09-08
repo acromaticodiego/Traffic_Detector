@@ -9,12 +9,36 @@ scales them to the rendered <video> size.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Optional
 
 from ..events.schemas import Event
 from ..incidents.schemas import IncidentCandidate
 from ..motion.motion_analyzer import MotionAnalysis
 from ..tracking.track_state import TrackState
+from .config import REPO_ROOT
+
+
+def _relative_evidence(raw: Any) -> Optional[str]:
+    """
+    La ruta de la evidencia, relativa a la raíz del repo y con "/".
+
+    Absoluta no sirve: queda guardada en la base y dentro de un JSON que va al
+    navegador, así que filtra el árbol de directorios del servidor y deja de
+    resolver apenas el despliegue cambia de máquina. Una ruta de fuera del
+    repo se deja como está —es una configuración deliberada— pero normalizada
+    a barras para que la base no dependa del sistema operativo.
+    """
+
+    if not raw:
+        return None
+
+    path = Path(str(raw))
+
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def track_to_dict(
@@ -67,7 +91,22 @@ def incident_to_dict(
         "track_ids": list(incident.track_ids),
         "confidence": round(float(incident.confidence), 3),
         "bbox": incident.bbox,
-        "data": _jsonify(incident.data),
+        # `data` es el diccionario libre del motor y se manda tal cual, salvo
+        # la ruta de la evidencia: el motor la guarda absoluta y ese campo
+        # viaja al navegador y a la base. Una ruta absoluta ahí filtra el
+        # árbol de directorios del servidor y además deja de resolver si el
+        # despliegue cambia de máquina. La versión utilizable va al primer
+        # nivel, abajo.
+        "data": _jsonify(
+            {k: v for k, v in incident.data.items() if k != "evidence_path"}
+        ),
+        # Al primer nivel además de dentro de `data`: es lo que necesitan
+        # tanto el escritor —que la guarda en su propia columna— como el
+        # frontend, y ninguno de los dos debería tener que saber cómo se
+        # llama la clave dentro del diccionario libre del motor.
+        "evidence_path": _relative_evidence(
+            incident.data.get("evidence_path")
+        ),
         "t": round(t, 3) if t is not None else None,
     }
 

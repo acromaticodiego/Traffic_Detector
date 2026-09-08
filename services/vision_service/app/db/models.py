@@ -25,6 +25,25 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
 
+# ----------------------------------------------------------------------
+# Estados de revisión
+# ----------------------------------------------------------------------
+# Se guardan como texto y no como enum de Postgres a propósito: agregar un
+# estado nuevo a un enum exige una migración con ALTER TYPE, y estos van a
+# cambiar mientras se afina el flujo de trabajo del agente.
+
+REVIEW_PENDING = "pendiente"
+REVIEW_CONFIRMED = "confirmado"
+REVIEW_DISCARDED = "descartado"
+REVIEW_ARCHIVED = "archivado"
+
+REVIEW_STATUSES = (
+    REVIEW_PENDING,
+    REVIEW_CONFIRMED,
+    REVIEW_DISCARDED,
+    REVIEW_ARCHIVED,
+)
+
 
 class CameraRow(Base):
     """Una cámara y su calibración."""
@@ -103,9 +122,60 @@ class IncidentRow(Base):
     # información al cambiar de versión.
     data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
+    # Carpeta con el frame original y el anotado, relativa a la raíz del repo.
+    # Va en su propia columna y no solo dentro de `data` porque "¿qué
+    # incidentes tienen evidencia?" es una pregunta de todos los días, y
+    # dentro del JSONB obliga a un filtro que ningún índice ayuda. Nula
+    # cuando la captura está apagada o el incidente se detectó antes de esto.
+    evidence_path: Mapped[str | None] = mapped_column(Text)
+
     detected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    # ------------------------------------------------------------------
+    # Revisión humana
+    # ------------------------------------------------------------------
+    # El detector propone y una persona dispone. Un incidente recién
+    # detectado no es un hecho, es una hipótesis con una confianza; estas
+    # columnas guardan el veredicto de quien la revisó.
+    #
+    # Un falso positivo se marca `descartado`, nunca se borra: esa fila es el
+    # único dato que dice cuántas veces se equivoca el modelo, que es
+    # justamente lo que hace falta para mejorarlo. Y un clic equivocado del
+    # agente se deshace.
+
+    review_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        server_default=REVIEW_PENDING,
+        default=REVIEW_PENDING,
+    )
+
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Quién revisó. Todavía no hay autenticación, así que hoy es lo que diga
+    # el cliente: sirve para dejar la traza preparada, no para confiar en ella.
+    reviewed_by: Mapped[str | None] = mapped_column(String(120))
+
+    # Por qué se descartó. Leer "no era un choque, era un bus parando" seis
+    # meses después vale más que el estado a secas.
+    review_note: Mapped[str | None] = mapped_column(Text)
+
+    # ------------------------------------------------------------------
+    # Resumen generado por IA
+    # ------------------------------------------------------------------
+    # Se guarda porque generarlo cuesta dinero y latencia: el agente abre el
+    # mismo incidente varias veces mientras decide, y sin caché cada apertura
+    # sería otra llamada al modelo. Nulo mientras nadie lo haya pedido.
+
+    ai_summary: Mapped[str | None] = mapped_column(Text)
+
+    ai_summary_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Qué modelo lo escribió. Sin esto, dentro de seis meses no hay forma de
+    # saber si un resumen raro salió de un modelo que ya se reemplazó.
+    ai_model: Mapped[str | None] = mapped_column(String(64))
 
     camera: Mapped[CameraRow] = relationship(back_populates="incidents")
 
@@ -114,6 +184,9 @@ class IncidentRow(Base):
         # primero", y el orden descendente evita un sort en cada página.
         Index("ix_incidents_camera_detected", "camera_id", detected_at.desc()),
         Index("ix_incidents_type", "incident_type"),
+        # La consulta de la bandeja de revisión: "lo que falta por revisar,
+        # de más reciente a más antiguo".
+        Index("ix_incidents_review", "review_status", detected_at.desc()),
     )
 
     def __repr__(self) -> str:

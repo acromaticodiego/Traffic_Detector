@@ -17,6 +17,7 @@ from ..tracking.tracker import ByteTrackTracker
 from ..tracking.track_manager import TrackManager
 from ..motion.motion_analyzer import MotionAnalyzer
 from ..events.event_engine import EventEngine
+from ..incidents.evidence import IncidentEvidence
 from ..incidents.incident_engine import IncidentEngine
 from ..vision_engine import VisionEngine
 
@@ -53,11 +54,16 @@ def create_detector() -> YOLODetector:
     return detector
 
 
-def build_vision_engine(detector: YOLODetector) -> VisionEngine:
+def build_vision_engine(
+    detector: YOLODetector,
+    camera_id: str = "",
+) -> VisionEngine:
     """
     Build a fresh VisionEngine around an already
     loaded detector. All stateful components are new,
     so each session starts clean.
+
+    `camera_id` separa la evidencia en disco por cámara.
     """
 
     tracker = ByteTrackTracker(
@@ -68,6 +74,18 @@ def build_vision_engine(detector: YOLODetector) -> VisionEngine:
         device=detector.device,
     )
 
+    # Sin esto el motor recibe evidence=None y no guarda nada: el servicio
+    # detecta los incidentes, los muestra en vivo y los escribe en la tabla,
+    # pero sin una sola imagen con la que auditarlos después.
+    evidence = (
+        IncidentEvidence(
+            output_dir=settings.evidence_dir,
+            scope=camera_id,
+        )
+        if settings.evidence_enabled
+        else None
+    )
+
     return VisionEngine(
         detector=detector,
         tracker=tracker,
@@ -75,4 +93,5 @@ def build_vision_engine(detector: YOLODetector) -> VisionEngine:
         event_engine=EventEngine(),
         motion_analyzer=MotionAnalyzer(),
         incident_engine=IncidentEngine(),
+        evidence=evidence,
     )
