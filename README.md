@@ -85,6 +85,38 @@ Conteo de vehículos activos por frame con suavizado EMA → `bajo` / `medio` / 
 (umbrales configurables).
 └── README.md
 ```
+---
+
+## Calidad (lint y tests)
+
+```powershell
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m ruff check .      # lint
+.venv\Scripts\python -m pytest            # tests
+```
+
+`requirements-dev.txt` a propósito **no** trae torch, ultralytics ni opencv:
+los tests cubren la lógica pura —nivel de tráfico, ROI de la calzada, análisis
+de movimiento, motor de incidentes, registro de cámaras y serialización del
+WebSocket—, que es la que decide qué se reporta y no necesita ni el modelo ni
+el video. Así la suite corre en menos de un segundo y el CI en menos de un
+minuto, en vez de bajar un par de gigas de wheels.
+
+Un test lee el `cameras.yaml` real del repo y comprueba que cada entrada
+parsea, que las ROI son polígonos válidos y que los umbrales van en orden. Una
+calibración mal pegada, si no, no se nota hasta que el servicio ya está
+sirviendo el nivel equivocado.
+
+`ruff` se configura en `pyproject.toml` con un conjunto de reglas conservador
+(pyflakes y errores de pycodestyle): atrapa imports muertos, nombres
+inexistentes y sintaxis inválida, sin obligar a reescribir el estilo del código
+ya escrito.
+
+`.github/workflows/ci.yml` corre lint y tests en cada push a `master` y en cada
+pull request.
+
+---
+
 Imagen del funcionamiento
 <img width="1917" height="1028" alt="image" src="https://github.com/user-attachments/assets/c59d558c-1c4a-4106-947c-42972a250b59" />
 <img width="1916" height="1030" alt="image" src="https://github.com/user-attachments/assets/0686ac31-cc8d-4ee2-9c25-5eb39be9cf52" />

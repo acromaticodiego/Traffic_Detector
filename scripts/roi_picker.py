@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "services" / "vision_service"))
 
 from app.api.cameras import get_camera, list_cameras  # noqa: E402
-from app.api.config import settings  # noqa: E402
+
 
 WINDOW = "ROI de la calzada  |  clic: punto  ·  z: deshacer  ·  r: reiniciar  ·  ENTER: listo"
 
