@@ -1,0 +1,14 @@
+# Dependencias de ejecución del proyecto.
+#
+#   python -m venv .venv
+#   .venv\Scripts\pip install -r requirements.txt
+#
+# Los pines NO se escriben aquí: viven en el requirements.txt del servicio,
+# junto al código que los usa, para no tener dos listas que se desincronicen.
+# Este archivo existe porque la raíz del repo es donde se busca por costumbre,
+# y porque el servicio se ejecuta desde aquí
+# (python -m services.vision_service.app.api).
+-r services/vision_service/requirements.txt
+
+# Para desarrollo y CI (ruff + pytest, sin torch ni opencv):
+#   .venv\Scripts\pip install -r requirements-dev.txt

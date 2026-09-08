@@ -80,6 +80,26 @@ def _env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Acepta 0/1, true/false, yes/no. Cualquier otra cosa cae en el default,
+    porque un typo no debería apagar en silencio la captura de evidencia."""
+
+    value = os.getenv(name)
+
+    if not value:
+        return default
+
+    lowered = value.strip().lower()
+
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+
+    if lowered in ("0", "false", "no", "off"):
+        return False
+
+    return default
+
+
 def _default_video_path() -> Path:
     """
     Use VISION_VIDEO_PATH if given, otherwise the first
@@ -150,6 +170,48 @@ class Settings:
 
     cors_origins: list[str] = field(default_factory=_cors_origins)
 
+    # ------------------------------------------------------------------
+    # Resumen con IA (Gemini)
+    # ------------------------------------------------------------------
+    # La clave NO tiene valor por defecto y nunca se escribe en el código:
+    # va en el .env, que está en .gitignore. Si falta, el servicio arranca
+    # igual y el resumen simplemente no se ofrece — el panel de detalle
+    # tiene que funcionar sin depender de un proveedor externo.
+    gemini_api_key: str = field(
+        default_factory=lambda: _env_str("GEMINI_API_KEY", "")
+    )
+
+    # Configurable a propósito: los identificadores de modelo de Google
+    # cambian, y quedarse fijado a uno retirado convierte un cambio de
+    # proveedor en un cambio de código.
+    gemini_model: str = field(
+        default_factory=lambda: _env_str("GEMINI_MODEL", "gemini-2.5-flash")
+    )
+
+    # Segundos antes de rendirse. Una petición colgada no puede dejar
+    # esperando al agente que abrió el incidente.
+    gemini_timeout: float = field(
+        default_factory=lambda: _env_float("GEMINI_TIMEOUT", 30.0)
+    )
+
+    # Evidencia de los incidentes: por cada uno se guarda el frame original y
+    # una copia anotada con las cajas de los vehículos involucrados. Es lo que
+    # permite auditar después si el incidente fue real, así que va encendida
+    # por defecto; se apaga con VISION_EVIDENCE=0 cuando el disco es el
+    # problema (dos JPEG por incidente, sin límite de tamaño).
+    evidence_enabled: bool = field(
+        default_factory=lambda: _env_bool("VISION_EVIDENCE", True)
+    )
+
+    evidence_dir: Path = field(
+        default_factory=lambda: Path(
+            _env_str(
+                "VISION_EVIDENCE_DIR",
+                str(REPO_ROOT / "outputs" / "incidents"),
+            )
+        )
+    )
+
     # Postgres. The +psycopg suffix picks the psycopg 3 driver explicitly;
     # without it SQLAlchemy still looks for psycopg2, which is not installed.
     database_url: str = field(
@@ -211,6 +273,12 @@ class Settings:
             "image_size": self.image_size,
             "frame_stride": self.frame_stride,
             "cors_origins": self.cors_origins,
+            "evidence_enabled": self.evidence_enabled,
+            "evidence_dir": str(self.evidence_dir),
+            # Solo si hay clave o no. El valor jamás se registra ni se
+            # devuelve por /health.
+            "gemini_configured": bool(self.gemini_api_key),
+            "gemini_model": self.gemini_model,
             # redacted: describe() goes to the log on every startup
             "database_url": redact_url(self.database_url),
             "road_roi": self.road_roi,

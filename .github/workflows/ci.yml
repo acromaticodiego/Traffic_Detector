@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
 
 # Un push nuevo a la misma rama cancela la ejecución anterior.

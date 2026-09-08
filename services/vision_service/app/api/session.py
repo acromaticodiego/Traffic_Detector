@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import logging
 import math
 import threading
 from datetime import datetime
@@ -26,7 +27,7 @@ from typing import Any, Optional
 import cv2
 
 from ..detection.detector import YOLODetector
-from .cameras import Camera
+from .cameras import Camera, registry_source
 from .config import settings
 from .road_roi import build_road_roi
 from .pipeline import build_vision_engine
@@ -34,6 +35,8 @@ from .protocol import PROTOCOL_VERSION
 from ..db.incident_writer import incident_writer
 from .serializers import event_to_dict, incident_to_dict, track_to_dict
 from .traffic_level import TrafficLevelEstimator
+
+logger = logging.getLogger(__name__)
 
 _QUEUE_MAXSIZE = 120
 _DEFAULT_FPS = 25.0
@@ -53,7 +56,7 @@ class VideoSession:
         self._camera = camera
         self._stride = max(1, stride or settings.frame_stride)
 
-        self._engine = build_vision_engine(detector)
+        self._engine = build_vision_engine(detector, camera.id)
 
         # Every scene knob comes from the camera, not from the global config:
         # two cameras in the same deployment have different geometry, so
@@ -136,6 +139,8 @@ class VideoSession:
         }
 
     def start(self) -> None:
+        self._warn_if_incidents_will_not_persist()
+
         incident_writer.reset_seen()
         incident_writer.start()
 
@@ -145,6 +150,32 @@ class VideoSession:
             daemon=True,
         )
         self._thread.start()
+
+    def _warn_if_incidents_will_not_persist(self) -> None:
+        """
+        Avisar ANTES de procesar, no después de perder el histórico.
+
+        `incidents.camera_id` es clave foránea a `cameras.id`. Si el registro
+        vigente no salió de Postgres, esta cámara no está en esa tabla y cada
+        inserción va a ser rechazada —una por una, en un hilo aparte— mientras
+        el servicio sigue respondiendo con total normalidad. El síntoma
+        aparece días después, cuando alguien consulta el histórico y no hay
+        nada.
+        """
+
+        source = registry_source()
+
+        if source == "postgres":
+            return
+
+        logger.warning(
+            "El registro de cámaras viene de '%s', no de Postgres: la cámara "
+            "'%s' probablemente no existe en la tabla `cameras` y los "
+            "incidentes de esta sesión se van a rechazar. Correr "
+            "scripts/seed_cameras.py para persistirlos.",
+            source,
+            self._camera.id,
+        )
 
     async def messages(self):
         """

@@ -1,9 +1,18 @@
+import re
 from pathlib import Path
 
 import cv2
 
 from ..tracking.track_state import TrackState
 from .schemas import IncidentCandidate
+
+# Lo que no sea esto se reemplaza por "_": el id del incidente y el de la
+# cámara terminan siendo nombres de carpeta, y ambos los escribe una persona.
+_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _slug(value: str) -> str:
+    return _UNSAFE.sub("_", value).strip("_") or "sin_id"
 
 
 class IncidentEvidence:
@@ -22,13 +31,30 @@ class IncidentEvidence:
     def __init__(
         self,
         output_dir: Path,
+        scope: str = "",
     ):
+        """
+        `scope` separa la evidencia por cámara. Sin él, dos cámaras que
+        procesan el mismo número de frame escriben en la misma carpeta y la
+        segunda pisa a la primera.
+        """
+
         self.output_dir = Path(output_dir)
+
+        if scope:
+            self.output_dir = self.output_dir / _slug(scope)
 
         self.output_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
+
+        # Lo ya guardado en esta corrida. El motor reporta el mismo incidente
+        # durante todos los frames que dura, así que sin esto un solo choque
+        # deja decenas de carpetas idénticas en disco —una por frame— de las
+        # que la base referencia exactamente una. Se guarda la primera, que
+        # además es la del instante del impacto.
+        self._saved: dict[str, Path] = {}
 
     def save(
         self,
@@ -42,9 +68,31 @@ class IncidentEvidence:
         # INCIDENT DIRECTORY
         # ==================================================
 
+        # El frame por sí solo no identifica un incidente: en un mismo frame
+        # puede haber dos choques distintos, y el motor reporta el mismo
+        # incidente durante varios frames seguidos. Con el id de agrupación
+        # delante, cada incidente tiene su carpeta y las repeticiones caen
+        # sobre la suya en vez de sobre la del vecino.
+        name = (
+            _slug(incident.incident_id)
+            if incident.incident_id
+            else _slug(incident.incident_type)
+        )
+
+        # Misma clave que usa el escritor de la base para deduplicar, para que
+        # el disco y la tabla cuenten la misma historia. Sin id de agrupación,
+        # el tipo y los vehículos involucrados identifican el incidente.
+        key = (
+            incident.incident_id
+            or f"{incident.incident_type}:{sorted(incident.track_ids)}"
+        )
+
+        if key in self._saved:
+            return self._saved[key]
+
         incident_dir = (
             self.output_dir
-            / f"incident_{frame_id}"
+            / f"{name}_{frame_id}"
         )
 
         incident_dir.mkdir(
@@ -220,5 +268,7 @@ class IncidentEvidence:
             str(annotated_path),
             annotated,
         )
+
+        self._saved[key] = annotated_path
 
         return annotated_path

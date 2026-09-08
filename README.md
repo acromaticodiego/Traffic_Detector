@@ -26,6 +26,217 @@ vehículos detenidos) con evidencia, mostrándolos en una interfaz web en vivo.
 
 ---
 
+## Instalación y puesta en marcha
+
+Guía completa para dejar el proyecto corriendo en una máquina nueva (Windows).
+En Linux/macOS es lo mismo cambiando `.venv\Scripts\` por `.venv/bin/`.
+
+### 1. Requisitos previos
+
+| Software | Versión | Para qué | Dónde |
+|---|---|---|---|
+| **Python** | **3.12** | Este repo (servicio de visión) | [python.org](https://www.python.org/downloads/) — marcar *Add python.exe to PATH* |
+| **PostgreSQL** | **16 o superior** | Cámaras e incidentes | [postgresql.org](https://www.postgresql.org/download/windows/) |
+| **Node.js** | **20 LTS o 22** | Solo para el **frontend**, que vive en otro repo | [nodejs.org](https://nodejs.org/) |
+| **npm** | el que trae Node (10.x) | Ídem | viene incluido con Node |
+| **Git** | cualquiera reciente | Clonar el repo | [git-scm.com](https://git-scm.com/) |
+| GPU NVIDIA + CUDA | opcional | Acelera la inferencia | sin GPU corre en CPU, más lento |
+
+Sobre las versiones: **Python 3.12 no es negociable** — es la que fija
+`pyproject.toml` (`target-version = "py312"`) y la que usa el CI; con 3.13 los
+wheels de torch y ultralytics que están pinneados pueden no existir todavía.
+Con Postgres en cambio hay margen: [`STACK.md`](STACK.md) fija **16**, el
+entorno de desarrollo actual corre **18.6**, y el esquema no usa nada exclusivo
+de ninguna de las dos (solo tipos estándar y `JSONB`), así que cualquiera
+sirve. Lo que no conviene es mezclar: un `pg_dump` hecho en 18 no restaura en
+16.
+
+Verificar antes de seguir:
+
+```powershell
+python --version    # Python 3.12.x
+node --version      # v20.x o v22.x  (solo si vas a levantar el frontend)
+npm --version       # 10.x
+psql --version      # psql (PostgreSQL) 16.x o 18.x
+```
+
+Si `psql` no aparece, está en `C:\Program Files\PostgreSQL\<versión>\bin`: hay
+que agregar esa carpeta al PATH o llamarlo con la ruta completa.
+
+### 2. Clonar el repo
+
+```powershell
+git clone <url-del-repo> traffic_detector
+cd traffic_detector
+```
+
+### 3. Entorno de Python y dependencias
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install --upgrade pip
+.venv\Scripts\python -m pip install -r requirements.txt
+```
+
+Son unos 2 GB entre torch, ultralytics y opencv: la primera vez tarda varios
+minutos.
+
+Hay tres archivos de dependencias y conviene saber cuál es cuál:
+
+| Archivo | Contenido | Cuándo se usa |
+|---|---|---|
+| `requirements.txt` | El de la raíz; delega en el del servicio | Para **ejecutar** el proyecto |
+| `services/vision_service/requirements.txt` | Los pines reales (FastAPI, torch, ultralytics, SQLAlchemy, Alembic, psycopg) | Lo instala el anterior |
+| `requirements-dev.txt` | Solo `ruff`, `pytest`, numpy y PyYAML | Para **lint y tests**; es lo único que instala el CI |
+
+Los pines viven en un solo lugar a propósito, para que no existan dos listas
+que se puedan desincronizar.
+
+### 4. Lo que **no** viene en el clon
+
+Dos cosas que el repo ignora por peso (ver `.gitignore`) y hay que copiar a
+mano, o el servicio arranca pero no detecta nada:
+
+| Qué | Dónde va | Cómo conseguirlo |
+|---|---|---|
+| **Pesos del modelo** `detectorfinal.pt` | `models/detectorfinal.pt` | Pedirlo a quien mantiene el proyecto (`*.pt` está en `.gitignore`) |
+| **Video de entrada** | `videos/input/<archivo>.mp4` | Igual; los `.mp4` también están ignorados |
+
+El nombre del video debe coincidir con el `source` de la cámara en
+`cameras.yaml`, o se edita el YAML para que apunte al archivo que se tenga.
+
+### 5. Base de datos PostgreSQL
+
+**5.1. Crear la base.** Alembic crea las *tablas*, pero no la *base de datos*:
+
+```powershell
+psql -U postgres -c "CREATE DATABASE traffic_detector;"
+```
+
+Pide la contraseña que se definió al instalar Postgres.
+
+**5.2. Configurar el `.env`.** Ese archivo está en `.gitignore` porque lleva la
+contraseña, así que cada quien crea el suyo a partir del ejemplo versionado:
+
+```powershell
+copy .env.example .env
+```
+
+y edita la línea de la base de datos con sus credenciales:
+
+```
+VISION_DATABASE_URL=postgresql+psycopg://postgres:TU_CONTRASEÑA@localhost:5432/traffic_detector
+```
+
+**5.3. Aplicar las migraciones:**
+
+```powershell
+.venv\Scripts\alembic upgrade head
+```
+
+Esto crea `cameras`, `incidents` y sus índices. La URL **no** está escrita en
+`alembic.ini`: `migrations/env.py` la lee de la misma configuración que usa el
+servicio, para no tener dos fuentes de verdad ni versionar la contraseña. Por
+eso el paso 5.2 tiene que estar hecho antes que este.
+
+Comprobar que quedó en la última revisión — ambos comandos deben imprimir la
+misma:
+
+```powershell
+.venv\Scripts\alembic current
+.venv\Scripts\alembic heads
+```
+
+**5.4. Cargar las cámaras:**
+
+```powershell
+.venv\Scripts\python scripts\seed_cameras.py
+```
+
+Lee `cameras.yaml` y lo vuelca en la tabla `cameras`. Es idempotente: se puede
+volver a correr cada vez que cambie la calibración y actualiza las filas
+existentes en vez de duplicarlas. Con `--dry-run` muestra qué haría sin tocar
+la base.
+
+> **Migrar el esquema no es lo mismo que copiar los datos.**
+> `alembic upgrade head` deja una base vacía con la estructura correcta, que es
+> lo que necesita alguien que arranca de cero. Si además hacen falta los
+> incidentes ya registrados en otra máquina, eso es un volcado aparte:
+> `pg_dump -U postgres traffic_detector > dump.sql` en el origen y
+> `psql -U postgres -d traffic_detector -f dump.sql` en el destino, con la
+> misma versión mayor de Postgres a ambos lados.
+
+### 6. Levantar el servicio de visión
+
+```powershell
+.venv\Scripts\python -m services.vision_service.app.api
+```
+
+o, equivalente y más explícito:
+
+```powershell
+.venv\Scripts\python -m uvicorn services.vision_service.app.api.main:app --host 0.0.0.0 --port 8000
+```
+
+Se ejecuta **desde la raíz del repo**, para que resuelva el paquete
+`services.*`. Verificar en otra terminal:
+
+```powershell
+curl http://localhost:8000/health
+```
+
+Debe responder con el estado, el modelo cargado y el video detectado. Si dice
+que no encuentra modelo o video, falta el paso 4.
+
+La lista completa de variables de entorno (umbrales, ROI, CORS, puerto) está en
+[`services/vision_service/README.md`](services/vision_service/README.md).
+
+### 7. Frontend (repo aparte) — aquí entran Node y npm
+
+La interfaz **no está en este repo**: vive en `../traffic_detector_front`
+(React + Vite + TypeScript). Este repo es solo Python y no tiene `package.json`.
+
+```powershell
+cd ..\traffic_detector_front
+npm install
+copy .env.example .env
+npm run dev
+```
+
+El `.env` del frontend apunta al backend; para local ya viene bien por defecto:
+
+```
+VITE_API_BASE=http://localhost:8000
+VITE_WS_BASE=ws://localhost:8000
+```
+
+Vite sirve en `http://localhost:5173`. El backend tiene que estar corriendo
+(paso 6) o la interfaz carga sin datos.
+
+### 8. Verificar que todo quedó bien
+
+```powershell
+.venv\Scripts\python -m pip install -r requirements-dev.txt
+.venv\Scripts\python -m ruff check .
+.venv\Scripts\python -m pytest
+```
+
+La suite corre en menos de un segundo y no necesita ni el modelo ni el video.
+
+### 9. Problemas frecuentes
+
+| Síntoma | Causa probable | Solución |
+|---|---|---|
+| `ModuleNotFoundError: services...` | Se ejecutó desde otra carpeta | Correr siempre desde la raíz del repo |
+| `connection refused` en el puerto 5432 | El servicio de Postgres no está arriba | Iniciar `postgresql-x64-<versión>` en *Servicios* de Windows |
+| `password authentication failed` | Contraseña mal puesta | Revisar `VISION_DATABASE_URL` en `.env` |
+| `database "traffic_detector" does not exist` | Falta el paso 5.1 | Crear la base antes de migrar |
+| `/health` dice que no hay modelo | `models/detectorfinal.pt` no está | Ver paso 4 |
+| Inferencia muy lenta | Está corriendo en CPU | Instalar torch con CUDA, o subir `VISION_FRAME_STRIDE` |
+| El front carga pero sin video | El backend no está arriba, o CORS | Levantar el paso 6; revisar `VISION_CORS_ORIGINS` |
+
+---
+
 ## Arquitectura
 
 ```
@@ -83,8 +294,6 @@ Clases del modelo: `bus`, `car`, `ciclist`, `monopatin`, `motorcycle`,
 
 Conteo de vehículos activos por frame con suavizado EMA → `bajo` / `medio` / `alto`
 (umbrales configurables).
-└── README.md
-```
 ---
 
 ## Calidad (lint y tests)

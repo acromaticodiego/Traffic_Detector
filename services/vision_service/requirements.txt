@@ -17,6 +17,11 @@ sqlalchemy==2.0.52
 alembic==1.19.1
 psycopg[binary]==3.3.5
 
+# Resumen de incidentes con IA. El SDK unificado de Google (equivalente en
+# Python del @google/genai que fija STACK.md), no el antiguo
+# google-generativeai. La clave va en el .env, nunca en el código.
+google-genai==2.22.0
+
 # Support
 pydantic==2.13.4
 python-multipart==0.0.32
