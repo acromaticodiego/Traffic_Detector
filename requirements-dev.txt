@@ -1,0 +1,16 @@
+# Herramientas de desarrollo y CI.
+#
+#   pip install -r requirements-dev.txt
+#
+# A propósito NO incluye torch, ultralytics ni opencv: los tests cubren la
+# lógica pura (nivel de tráfico, ROI, movimiento, incidentes, registro de
+# cámaras), que no toca el modelo ni el video. Así el CI corre en menos de un
+# minuto en vez de bajar un par de gigas de wheels. Para levantar el servicio
+# completo sigue haciendo falta services/vision_service/requirements.txt.
+
+pytest==9.1.1
+ruff==0.16.6
+
+# Dependencias ligeras que sí importan los módulos bajo prueba.
+numpy==2.5.2
+PyYAML==6.0.3

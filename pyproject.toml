@@ -1,0 +1,28 @@
+# Configuración de herramientas. El servicio se ejecuta desde la raíz del
+# repo (`python -m services.vision_service.app.api`), así que tanto ruff como
+# pytest toman esta carpeta como raíz.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = [
+    ".venv",
+    "migrations/versions",
+    "models",
+    "outputs",
+    "videos",
+]
+
+[tool.ruff.lint]
+# Conjunto conservador a propósito: pyflakes (F) y los errores de pycodestyle
+# (E4/E7/E9) atrapan lo que rompe de verdad —imports muertos, nombres que no
+# existen, sintaxis inválida— sin obligar a reescribir el estilo del código ya
+# escrito. Ampliar con "I" (orden de imports) o "UP" cuando haya ganas.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Los módulos se importan como services.vision_service.app.*, igual que en
+# los scripts y en el arranque del servicio.
+pythonpath = ["."]
+addopts = "-q"
