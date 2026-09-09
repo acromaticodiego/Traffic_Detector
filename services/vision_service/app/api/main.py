@@ -23,12 +23,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from .cameras import list_cameras, registry_source
 from .config import config_fingerprint, redact_url, settings
 from ..db.incident_writer import incident_writer
+from ..incidents.retention import run_retention
 from .protocol import PROTOCOL_VERSION
 from .pipeline import create_detector
 from .routes import analytics, auth, cameras, incidents, inference, shifts, users, video
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vision_service")
+
+# Cada cuánto se revisa si hay evidencia vencida. Seis horas: el plazo se mide
+# en días, así que revisar más seguido no adelanta nada, y menos seguido
+# dejaría un servicio de fin de semana sin limpiar hasta el lunes.
+_RETENTION_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+async def _retention_loop() -> None:
+    """
+    Borra la evidencia vencida cada pocas horas, mientras el servicio viva.
+
+    Corre en un hilo aparte porque recorre directorios y habla con Postgres, y
+    el bucle de asyncio está atendiendo cámaras. Un fallo aquí se registra y se
+    reintenta: quedarse sin limpiar unas horas es molesto, pero tumbar el
+    servicio por la limpieza sería mucho peor.
+    """
+
+    while True:
+        try:
+            await asyncio.to_thread(
+                run_retention,
+                settings.evidence_dir,
+                settings.evidence_retention_days,
+                settings.retention_dry_run,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "La limpieza de evidencia falló; se reintenta en la próxima "
+                "pasada."
+            )
+
+        await asyncio.sleep(_RETENTION_INTERVAL_SECONDS)
 
 
 def _quiet_connection_reset(loop, context):
@@ -58,7 +91,13 @@ async def lifespan(app: FastAPI):
 
     logger.info("Model ready. Classes: %s", app.state.detector.model.names)
 
+    # Una pasada al arrancar y luego cada pocas horas. Al arrancar porque un
+    # servicio que estuvo apagado una semana vuelve con evidencia vencida.
+    retention = asyncio.create_task(_retention_loop())
+
     yield
+
+    retention.cancel()
 
     # Las cámaras corren en hilos daemon, así que morirían solas con el
     # proceso; pararlas a mano libera las capturas y, con RTSP, cierra la

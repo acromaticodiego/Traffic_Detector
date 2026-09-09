@@ -299,6 +299,28 @@ class Settings:
         default_factory=lambda: _env_float("VISION_ANONYMIZE_FACE_BAND", 0.30)
     )
 
+    # ------------------------------------------------------------------
+    # Retención de la evidencia
+    # ------------------------------------------------------------------
+    # Cuántos días se conserva la imagen de un incidente. El incidente en sí
+    # NO se borra nunca: sigue en la bandeja con su veredicto, que es de donde
+    # sale la métrica de precisión. Lo que caduca es la foto, que es el dato
+    # personal.
+    #
+    # Cero o negativo = conservar indefinidamente, que es el valor por defecto
+    # a propósito: este número borra archivos, y una variable vacía o un typo
+    # tienen que dejar el disco intacto, nunca vaciarlo. Un despliegue real
+    # tiene que fijarlo a conciencia.
+    evidence_retention_days: int = field(
+        default_factory=lambda: _env_int("VISION_EVIDENCE_RETENTION_DAYS", 0)
+    )
+
+    # Registra qué borraría, sin borrar nada. Para mirar la primera pasada
+    # antes de soltarla sobre evidencia acumulada.
+    retention_dry_run: bool = field(
+        default_factory=lambda: _env_bool("VISION_RETENTION_DRY_RUN", False)
+    )
+
     # Postgres. The +psycopg suffix picks the psycopg 3 driver explicitly;
     # without it SQLAlchemy still looks for psycopg2, which is not installed.
     database_url: str = field(
@@ -365,6 +387,7 @@ class Settings:
             "evidence_enabled": self.evidence_enabled,
             "evidence_dir": str(self.evidence_dir),
             "anonymize_evidence": self.anonymize_evidence,
+            "evidence_retention_days": self.evidence_retention_days,
             # Solo si hay clave o no. El valor jamás se registra ni se
             # devuelve por /health.
             # Solo si hay secreto o no. El valor jamás se registra.

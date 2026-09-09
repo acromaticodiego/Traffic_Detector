@@ -237,6 +237,75 @@ La suite corre en menos de un segundo y no necesita ni el modelo ni el video.
 
 ---
 
+## Datos personales y retención
+
+El sistema graba vía pública, así que la evidencia que guarda contiene placas
+y rostros. Eso es tratamiento de datos personales bajo la **Ley 1581 de 2012**
+(Habeas Data) y su decreto reglamentario 1377 de 2013, y condiciona dos cosas
+del diseño.
+
+### Anonimización
+
+Las imágenes se anonimizan **antes** de escribirse: el original identificable
+no llega a existir en disco en ningún momento. Se pixelan —no se difuminan, un
+gaussiano suave conserva demasiada señal— la franja inferior de cada vehículo,
+donde va la placa, y la superior de todo lo que lleva a una persona.
+
+No se detectan las placas, se tapa la zona donde una placa tiene que estar. Un
+detector de placas falla abierto: la que no reconoce queda legible en disco y
+nadie se entera. La franja geométrica falla cerrada. Por el mismo criterio,
+una clase que el modelo no conozca se tapa por las dos puntas.
+
+Alcance declarado: se anonimiza lo que **se conserva**. La vista en vivo
+muestra la calle tal cual, porque es lo que el operario necesita para hacer su
+trabajo, y va detrás del permiso `stream:view`.
+
+| Variable | Qué hace |
+|---|---|
+| `VISION_ANONYMIZE` | Enciende la anonimización (por defecto sí) |
+| `VISION_ANONYMIZE_PLATE_BAND` | Fracción inferior de la caja que se tapa |
+| `VISION_ANONYMIZE_FACE_BAND` | Fracción superior |
+
+Si con el ángulo de una cámara se ve asomar una placa, **subir** el valor.
+Quedarse corto deja una placa legible guardada; pasarse solo cuesta imagen.
+
+### Retención
+
+La regla es: **el incidente se queda, la imagen caduca.**
+
+El dato personal es la foto, no la fila. La bandeja de revisión conserva su
+histórico entero y sus veredictos —de ahí sale la métrica de precisión— y a
+los N días la imagen se borra y `evidence_path` queda en null. Esto convive
+con el principio de que un incidente no se borra nunca.
+
+| Variable | Qué hace |
+|---|---|
+| `VISION_EVIDENCE_RETENTION_DAYS` | Días que vive una imagen. **0 = para siempre** |
+| `VISION_RETENTION_DRY_RUN` | Registra qué borraría, sin borrar |
+
+El valor por defecto es 0 —conservar— a propósito: esta configuración borra
+archivos, y una variable vacía tiene que dejar el disco intacto, no vaciarlo.
+**Un despliegue real tiene que fijar el plazo explícitamente.**
+
+La limpieza corre al arrancar y cada seis horas. Solo borra directorios bajo
+la raíz de la evidencia cuyo contenido sean únicamente imágenes: cualquier
+otra cosa se deja intacta.
+
+### Lo que todavía falta para un contrato público
+
+El código cubre la parte técnica. La Ley 1581 además exige, y esto **no es
+código**:
+
+- Una **política de tratamiento de la información** publicada, con la
+  finalidad declarada (medición de conflictos viales) y el plazo de
+  conservación, que debe coincidir con `VISION_EVIDENCE_RETENTION_DAYS`.
+- Un **responsable del tratamiento** identificado — normalmente la entidad
+  contratante, no el proveedor.
+- Registro de la base de datos ante la SIC, si aplica según el volumen.
+- Señalización en vía de que la zona está videovigilada.
+
+---
+
 ## Arquitectura
 
 ```
