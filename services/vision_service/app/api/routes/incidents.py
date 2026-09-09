@@ -16,14 +16,15 @@ import logging
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Annotated, Any, Iterator, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from ...ai import gemini
+from ...auth.dependencies import CurrentUser, require
 from ...db.models import REVIEW_STATUSES, IncidentRow
 from ...db.session import session_scope
 from ..config import REPO_ROOT, settings
@@ -80,7 +81,7 @@ def _row_to_dict(row: IncidentRow) -> dict[str, Any]:
     }
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(require("incidents:read"))])
 def list_incidents(
     camera: Optional[str] = None,
     type: Optional[str] = None,
@@ -154,7 +155,11 @@ class ReviewUpdate(BaseModel):
 
 
 @router.patch("/{incident_id}/review")
-def review_incident(incident_id: int, update: ReviewUpdate) -> dict[str, Any]:
+def review_incident(
+    incident_id: int,
+    update: ReviewUpdate,
+    user: Annotated[CurrentUser, Depends(require("incidents:review"))],
+) -> dict[str, Any]:
     """
     Cambia el estado de revisión de un incidente.
 
@@ -183,7 +188,9 @@ def review_incident(incident_id: int, update: ReviewUpdate) -> dict[str, Any]:
 
             row.review_status = update.status
             row.reviewed_at = datetime.now(timezone.utc)
-            row.reviewed_by = update.reviewed_by
+            # De la sesión, no de lo que mande el cliente: si el cliente
+            # elige el nombre, la traza de quién revisó no vale nada.
+            row.reviewed_by = user.email
             row.review_note = update.note
 
             session.flush()
@@ -241,7 +248,10 @@ def _evidence_file(row: IncidentRow, variant: str) -> Path:
 # ----------------------------------------------------------------------
 
 
-@router.post("/{incident_id}/summary")
+@router.post(
+    "/{incident_id}/summary",
+    dependencies=[Depends(require("incidents:summarize"))],
+)
 def incident_summary(incident_id: int, force: bool = False) -> dict[str, Any]:
     """
     El resumen del incidente, generándolo si aún no existe.
@@ -307,7 +317,10 @@ def incident_summary(incident_id: int, force: bool = False) -> dict[str, Any]:
     }
 
 
-@router.get("/{incident_id}/evidence")
+@router.get(
+    "/{incident_id}/evidence",
+    dependencies=[Depends(require("incidents:read"))],
+)
 def incident_evidence(
     incident_id: int,
     variant: str = Query(

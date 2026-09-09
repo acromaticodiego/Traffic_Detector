@@ -37,6 +37,8 @@ o el atajo:
 | GET | `/health` | estado, modelo cargado, video detectado |
 | GET | `/api/video` | mp4 crudo (soporta `Range` para seek) |
 | GET | `/api/video/meta` | fps, dimensiones, nº de frames, duración |
+| POST | `/api/auth/login` | correo y contraseña → token de sesión |
+| GET | `/api/auth/me` | perfil y permisos vigentes |
 | WS  | `/ws/inference?stride=N` | stream de inferencia (ver `../../ARCHITECTURE.md`) |
 
 ## Variables de entorno
@@ -54,6 +56,8 @@ o el atajo:
 | `VISION_TRAFFIC_SLOW_RATIO` | `0.35` (por debajo de esta fracción del flujo libre, el vehículo cuenta como detenido) |
 | `VISION_TRAFFIC_SMOOTHING` | `0.2` (EMA de ocupación y velocidad; mayor = reacciona más rápido) |
 | `VISION_CORS_ORIGINS` | `*` (lista separada por comas) |
+| `JWT_SECRET` | vacío. **Obligatorio** para iniciar sesión; mínimo 32 bytes. Generar con `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `JWT_EXPIRE_MINUTES` | `720` (12 h, un turno completo) |
 | `GEMINI_API_KEY` | vacío. Sin ella no se ofrece el resumen con IA; el resto del panel funciona igual |
 | `GEMINI_MODEL` | `gemini-2.5-flash` |
 | `GEMINI_TIMEOUT` | `30` segundos |

@@ -45,6 +45,136 @@ REVIEW_STATUSES = (
 )
 
 
+# ----------------------------------------------------------------------
+# Roles del sistema
+# ----------------------------------------------------------------------
+
+ROLE_ADMIN = "admin"
+ROLE_OPERARIO = "operario"
+ROLE_ANALISTA = "analista"
+
+# ----------------------------------------------------------------------
+# Permisos
+# ----------------------------------------------------------------------
+# Se nombran <recurso>:<accion> para que un vistazo baste. Viven en su
+# propia tabla y no como constantes del código porque el objetivo de
+# normalizar esto es poder cambiar qué puede hacer un rol con una fila, sin
+# desplegar.
+
+PERM_STREAM_VIEW = "stream:view"
+PERM_INCIDENTS_READ = "incidents:read"
+PERM_INCIDENTS_REVIEW = "incidents:review"
+PERM_INCIDENTS_SUMMARIZE = "incidents:summarize"
+PERM_CAMERAS_READ = "cameras:read"
+PERM_CAMERAS_WRITE = "cameras:write"
+PERM_USERS_MANAGE = "users:manage"
+
+
+class RoleRow(Base):
+    """Un rol y los permisos que trae."""
+
+    __tablename__ = "roles"
+
+    # El nombre es la clave natural: aparece en el token, en los logs y en la
+    # interfaz. Un serial solo agregaría un número que nadie usa.
+    name: Mapped[str] = mapped_column(String(32), primary_key=True)
+
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    permissions: Mapped[list["PermissionRow"]] = relationship(
+        secondary="role_permissions", back_populates="roles", lazy="selectin"
+    )
+
+    users: Mapped[list["UserRow"]] = relationship(back_populates="role")
+
+    def __repr__(self) -> str:
+        return f"<RoleRow {self.name!r}>"
+
+
+class PermissionRow(Base):
+    """Algo que se puede hacer en el sistema."""
+
+    __tablename__ = "permissions"
+
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    roles: Mapped[list[RoleRow]] = relationship(
+        secondary="role_permissions", back_populates="permissions"
+    )
+
+    def __repr__(self) -> str:
+        return f"<PermissionRow {self.code!r}>"
+
+
+class RolePermissionRow(Base):
+    """Qué permisos tiene cada rol. La tabla puente."""
+
+    __tablename__ = "role_permissions"
+
+    role_name: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("roles.name", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    permission_code: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("permissions.code", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
+class UserRow(Base):
+    """Una persona que puede entrar al sistema."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    # El identificador con el que entra. Se guarda normalizado en minúsculas
+    # para que "Juan@x.com" y "juan@x.com" no sean dos cuentas distintas.
+    email: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
+
+    full_name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+
+    # El hash bcrypt, nunca la contraseña. Si esta tabla se filtra, lo que se
+    # filtra son hashes: recuperar las contraseñas de ahí cuesta años por
+    # cuenta, que es exactamente el punto de usar bcrypt y no un SHA.
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    role_name: Mapped[str] = mapped_column(
+        String(32), ForeignKey("roles.name", ondelete="RESTRICT"), nullable=False
+    )
+
+    # Desactivar en vez de borrar: un usuario borrado se lleva por delante la
+    # trazabilidad de qué incidentes revisó.
+    active: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    role: Mapped[RoleRow] = relationship(back_populates="users", lazy="selectin")
+
+    @property
+    def permissions(self) -> set[str]:
+        """Los códigos de permiso que trae su rol."""
+        return {p.code for p in self.role.permissions}
+
+    def __repr__(self) -> str:
+        return f"<UserRow {self.email!r} ({self.role_name})>"
+
+
 class CameraRow(Base):
     """Una cámara y su calibración."""
 

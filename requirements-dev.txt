@@ -22,4 +22,8 @@ PyYAML==6.0.3
 # instalación, no los gigas de torch: la regla sigue siendo excluir el stack
 # de ML, no todo lo que no sea la librería estándar.
 fastapi==0.141.1
+# La autenticación tiene que probarse en el CI: es el código donde un error
+# no se nota hasta que alguien entra sin permiso.
+PyJWT==2.13.0
+bcrypt==5.0.0
 sqlalchemy==2.0.52

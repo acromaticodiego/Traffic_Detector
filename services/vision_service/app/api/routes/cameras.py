@@ -9,11 +9,18 @@ credenciales) se queda en el servidor.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from ...auth.dependencies import require
 from ..cameras import get_camera, list_cameras
 
-router = APIRouter(prefix="/api/cameras", tags=["cameras"])
+router = APIRouter(
+    prefix="/api/cameras", tags=["cameras"],
+    # Todo el módulo exige el permiso: es más seguro que
+    # decorarlas una por una, porque una ruta nueva queda
+    # protegida por omisión en vez de quedar abierta por olvido.
+    dependencies=[Depends(require("cameras:read"))],
+)
 
 
 @router.get("")

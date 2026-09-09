@@ -25,7 +25,7 @@ from .config import config_fingerprint, redact_url, settings
 from ..db.incident_writer import incident_writer
 from .protocol import PROTOCOL_VERSION
 from .pipeline import create_detector
-from .routes import cameras, incidents, inference, video
+from .routes import auth, cameras, incidents, inference, video
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vision_service")
@@ -78,6 +78,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(cameras.router)
 app.include_router(incidents.router)
 app.include_router(video.router)

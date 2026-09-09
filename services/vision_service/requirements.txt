@@ -22,6 +22,11 @@ psycopg[binary]==3.3.5
 # google-generativeai. La clave va en el .env, nunca en el código.
 google-genai==2.22.0
 
+# Autenticación. La clave se firma con PyJWT y las contraseñas se guardan
+# como hash bcrypt: en la base nunca hay una contraseña en claro.
+PyJWT==2.13.0
+bcrypt==5.0.0
+
 # Support
 pydantic==2.13.4
 python-multipart==0.0.32

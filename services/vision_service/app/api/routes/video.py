@@ -12,12 +12,19 @@ from __future__ import annotations
 import math
 
 import cv2
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from ...auth.dependencies import require
 from ..cameras import Camera, get_camera
 
-router = APIRouter(prefix="/api/video", tags=["video"])
+router = APIRouter(
+    prefix="/api/video", tags=["video"],
+    # Todo el módulo exige el permiso: es más seguro que
+    # decorarlas una por una, porque una ruta nueva queda
+    # protegida por omisión en vez de quedar abierta por olvido.
+    dependencies=[Depends(require("stream:view"))],
+)
 
 # Keyed by camera id and the file's modification time, so replacing a source
 # (even with the same name) is picked up without a restart, and two cameras
