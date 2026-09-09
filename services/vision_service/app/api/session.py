@@ -26,6 +26,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from typing import Any, Optional
 
@@ -40,6 +41,7 @@ from .pipeline import build_vision_engine
 from .protocol import PROTOCOL_VERSION
 from ..db.incident_writer import incident_writer
 from .serializers import event_to_dict, incident_to_dict, track_to_dict
+from . import metrics
 from .playback import Playback
 from .subscribers import Subscriber
 from .traffic_level import TrafficLevelEstimator
@@ -47,6 +49,11 @@ from .traffic_level import TrafficLevelEstimator
 logger = logging.getLogger(__name__)
 
 _DEFAULT_FPS = 25.0
+
+# Cuántos frames entran en la ventana con la que se mide el ritmo. A 25 fps
+# son unos doce segundos: suficiente para no bailar con cada bache y corto
+# para que una caída se note enseguida.
+_RATE_WINDOW = 300
 
 
 class VideoSession:
@@ -106,6 +113,12 @@ class VideoSession:
 
         # Cuántas veces se ha rebobinado el archivo.
         self.laps: int = 0
+
+        # Marcas de tiempo de los últimos frames leídos. El ritmo se mide en
+        # ventana y no desde el arranque: un promedio acumulado esconde que la
+        # cámara lleva un minuto atascada, que es justo lo que hay que ver.
+        self._marks: deque[float] = deque(maxlen=_RATE_WINDOW)
+        self._opened_at: float = 0.0
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -230,6 +243,8 @@ class VideoSession:
             return None
 
     def start(self) -> None:
+        self._opened_at = time.monotonic()
+
         self._warn_if_incidents_will_not_persist()
 
         incident_writer.start()
@@ -289,6 +304,49 @@ class VideoSession:
     def subscribers(self) -> int:
         with self._subs_lock:
             return len(self._subscribers)
+
+    # ------------------------------------------------------------------
+    # observabilidad
+    # ------------------------------------------------------------------
+
+    def stats(self) -> dict[str, Any]:
+        """
+        Los números crudos de esta cámara. El juicio lo hace `metrics`.
+
+        Aquí no se decide si la cámara está bien: solo se mide. Separarlo deja
+        el criterio en un sitio donde se puede discutir y probar sin abrir un
+        video.
+        """
+
+        now = time.monotonic()
+        marks = list(self._marks)
+
+        with self._subs_lock:
+            viewers = len(self._subscribers)
+            dropped = sum(s.dropped for s in self._subscribers)
+            pending = sum(s.pending for s in self._subscribers)
+
+        uptime = now - self._opened_at if self._opened_at else 0.0
+
+        return {
+            "camera_id": self._camera.id,
+            "source": "stream" if self._camera.is_stream else "archivo",
+            "uptime_s": round(uptime, 1),
+            "source_fps": round(self.fps, 1),
+            "measured_fps": metrics.rate(marks, now),
+            "stride": self._stride,
+            "frames_read": self.frames_read,
+            "frames_processed": self.frames_processed,
+            # Cuánto lleva sin producir un frame. Es lo que distingue una
+            # cámara lenta de una caída.
+            "since_last_frame_s": round(now - marks[-1], 1) if marks else round(uptime, 1),
+            "laps": self.laps,
+            "viewers": viewers,
+            # Mensajes que se le tiraron a algún cliente atrasado. Si sube,
+            # el problema es la red del operario, no la cámara.
+            "dropped_messages": dropped,
+            "pending_messages": pending,
+        }
 
     def stop(self) -> None:
         self._stop.set()
@@ -422,6 +480,7 @@ class VideoSession:
                 frame_id += 1
                 pass_frame += 1
                 self.frames_read = frame_id
+                self._marks.append(time.monotonic())
 
                 # El ritmo se marca sobre los frames leídos, no sobre los
                 # procesados: con stride > 1 el video sigue durando lo mismo.

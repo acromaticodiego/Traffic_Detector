@@ -26,7 +26,17 @@ from ..db.incident_writer import incident_writer
 from ..incidents.retention import run_retention
 from .protocol import PROTOCOL_VERSION
 from .pipeline import create_detector
-from .routes import analytics, auth, cameras, incidents, inference, shifts, users, video
+from .routes import (
+    analytics,
+    auth,
+    cameras,
+    incidents,
+    inference,
+    metrics,
+    shifts,
+    users,
+    video,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vision_service")
@@ -95,9 +105,14 @@ async def lifespan(app: FastAPI):
     # servicio que estuvo apagado una semana vuelve con evidencia vencida.
     retention = asyncio.create_task(_retention_loop())
 
+    # Vigila el ritmo de las cámaras y lo deja escrito en el log. Sin esto,
+    # una cámara que se queda atrás de la calle no se nota desde ningún lado.
+    watchdog = asyncio.create_task(metrics.watchdog())
+
     yield
 
     retention.cancel()
+    watchdog.cancel()
 
     # Las cámaras corren en hilos daemon, así que morirían solas con el
     # proceso; pararlas a mano libera las capturas y, con RTSP, cierra la
@@ -130,6 +145,7 @@ app.include_router(cameras.router)
 app.include_router(incidents.router)
 app.include_router(video.router)
 app.include_router(inference.router)
+app.include_router(metrics.router)
 
 
 @app.get("/health")
