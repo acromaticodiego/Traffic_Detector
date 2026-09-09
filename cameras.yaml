@@ -29,8 +29,18 @@ cameras:
     # El clip de demo cambia de cámara en el frame 569, así que por ahora
     # las dos entradas apuntan al mismo archivo.
     source: "videos/input/Grabación 2026-08-26 142508.mp4"
-    lat: 6.2442
-    lng: -75.5812
+    # Corregidas: apuntan al punto de la Autopista Norte que muestra el clip
+    # (cerca de la Terminal del Norte), medido sobre la vista satelital. Las
+    # anteriores (6.2442, -75.5812) eran de relleno y ponían la cámara a
+    # varios kilómetros de donde realmente mira.
+    lat: 6.278391
+    lng: -75.572262
+    # Homografía imagen -> metros sobre el asfalto, calibrada con
+    # scripts/homography_picker.py sobre un rectángulo de 12,1 x 11,2 m
+    # medido en la vista satelital. Comprobación: implica que un carro de
+    # 4,5 m ocupa ~90 px de alto abajo del encuadre, que es lo que miden las
+    # cajas del detector ahí.
+    homography: [0.03869724374, 0.05139477684, -11.64605643, 0.00395498769, -0.1415885593, 28.32483084, 0.0002968835874, 0.003611614935, 0.3089726202]
     # PROVISIONAL: es la ROI de la otra cámara. Encaja aproximadamente, pero
     # la franja excluida cae sobre un carril real. Redibujar con:
     #   scripts/roi_picker.py --camera cra55_cl37 --frame 900

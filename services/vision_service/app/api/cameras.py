@@ -51,6 +51,13 @@ class Camera:
     roi: str = ""
     perspective: float = 1.0
 
+    # Los nueve valores de la homografía que lleva píxeles a metros sobre el
+    # asfalto, o None si la cámara no está calibrada. La calcula
+    # scripts/homography_picker.py marcando cuatro esquinas de medidas
+    # conocidas. Sin ella el motor sigue midiendo en píxeles, que es lo que
+    # hace que dos vehículos de carriles distintos parezcan tocarse.
+    homography: Optional[list[float]] = None
+
     occupancy_medium: float = 0.22
     occupancy_high: float = 0.38
     free_speed: float = 0.08
@@ -60,6 +67,11 @@ class Camera:
     lng: Optional[float] = None
 
     notes: str = ""
+
+    @property
+    def metric(self) -> bool:
+        """Si esta cámara sabe convertir píxeles en metros."""
+        return bool(self.homography)
 
     @property
     def calibrated(self) -> bool:
@@ -76,6 +88,7 @@ class Camera:
             "lat": self.lat,
             "lng": self.lng,
             "calibrated": self.calibrated,
+            "metric": self.metric,
             "available": self.source.exists(),
             "thresholds": {
                 "medium": self.occupancy_medium,
@@ -112,6 +125,32 @@ def _resolve_source(raw: str) -> Path:
     return path if path.is_absolute() else REPO_ROOT / path
 
 
+def _parse_homography(cam_id: str, raw: Any) -> Optional[list[float]]:
+    """
+    Los nueve valores, validados al cargar y no al usarse.
+
+    Una homografía a medias es peor que ninguna: el servicio arrancaría
+    igual y empezaría a medir distancias equivocadas sin que nada falle.
+    """
+
+    if raw is None or raw == "":
+        return None
+
+    try:
+        values = [float(v) for v in raw]
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"La homografía de '{cam_id}' no es una lista de números."
+        ) from error
+
+    if len(values) != 9:
+        raise ValueError(
+            f"La homografía de '{cam_id}' necesita 9 valores, tiene {len(values)}."
+        )
+
+    return values
+
+
 def _parse(entry: dict[str, Any]) -> Camera:
 
     cam_id = str(entry.get("id") or "").strip()
@@ -144,6 +183,7 @@ def _parse(entry: dict[str, Any]) -> Camera:
         lat=entry.get("lat"),
         lng=entry.get("lng"),
         notes=str(entry.get("notes") or ""),
+        homography=_parse_homography(cam_id, entry.get("homography")),
     )
 
 
@@ -172,6 +212,7 @@ def _row_to_camera(row: Any) -> Camera:
         lat=row.lat,
         lng=row.lng,
         notes=row.notes or "",
+        homography=list(row.homography) if row.homography else None,
     )
 
 
