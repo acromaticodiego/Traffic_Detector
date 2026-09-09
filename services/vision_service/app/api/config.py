@@ -190,6 +190,30 @@ class Settings:
     )
 
     # ------------------------------------------------------------------
+    # Turnos de trabajo
+    # ------------------------------------------------------------------
+    # Cuánto silencio se perdona antes de dejar de contar el tiempo como
+    # trabajado. Cubre el corte de internet, el cambio de red y la pestaña que
+    # el navegador congela: a nadie se le descuenta el tiempo por su conexión.
+    shift_grace_minutes: int = field(
+        default_factory=lambda: _env_int("SHIFT_GRACE_MINUTES", 10)
+    )
+
+    # A partir de aquí se entiende que el turno terminó y el siguiente latido
+    # abre uno nuevo. Sin este tope, una pestaña olvidada abierta el viernes
+    # acumularía horas todo el fin de semana.
+    shift_timeout_minutes: int = field(
+        default_factory=lambda: _env_int("SHIFT_TIMEOUT_MINUTES", 60)
+    )
+
+    # Huso horario del despliegue. Decide dónde corta "hoy" en el dashboard:
+    # con UTC, en Colombia el día empezaría a las siete de la tarde anterior y
+    # las horas de un turno aparecerían repartidas entre dos días.
+    timezone: str = field(
+        default_factory=lambda: _env_str("VISION_TIMEZONE", "America/Bogota")
+    )
+
+    # ------------------------------------------------------------------
     # Resumen con IA (Gemini)
     # ------------------------------------------------------------------
     # La clave NO tiene valor por defecto y nunca se escribe en el código:
@@ -298,6 +322,9 @@ class Settings:
             # devuelve por /health.
             # Solo si hay secreto o no. El valor jamás se registra.
             "auth_configured": bool(self.jwt_secret),
+            "timezone": self.timezone,
+            "shift_grace_minutes": self.shift_grace_minutes,
+            "shift_timeout_minutes": self.shift_timeout_minutes,
             "jwt_expire_minutes": self.jwt_expire_minutes,
             "gemini_configured": bool(self.gemini_api_key),
             "gemini_model": self.gemini_model,

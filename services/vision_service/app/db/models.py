@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -68,6 +69,10 @@ PERM_INCIDENTS_SUMMARIZE = "incidents:summarize"
 PERM_CAMERAS_READ = "cameras:read"
 PERM_CAMERAS_WRITE = "cameras:write"
 PERM_USERS_MANAGE = "users:manage"
+# Ver la analítica de OTROS. La propia no pide permiso: cualquiera puede
+# mirar su propio turno, y exigir un permiso para eso solo daría cuentas
+# que no pueden ver lo que ellas mismas hicieron.
+PERM_ANALYTICS_READ_ALL = "analytics:read_all"
 
 
 class RoleRow(Base):
@@ -166,6 +171,10 @@ class UserRow(Base):
 
     role: Mapped[RoleRow] = relationship(back_populates="users", lazy="selectin")
 
+    shifts: Mapped[list["WorkSessionRow"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
     @property
     def permissions(self) -> set[str]:
         """Los códigos de permiso que trae su rol."""
@@ -173,6 +182,72 @@ class UserRow(Base):
 
     def __repr__(self) -> str:
         return f"<UserRow {self.email!r} ({self.role_name})>"
+
+
+class WorkSessionRow(Base):
+    """
+    Un turno de trabajo: desde que alguien entra hasta que deja de dar señales.
+
+    El tiempo se acumula en `active_seconds` a cada latido en vez de calcularse
+    al final como `ended_at - started_at`. Esa resta contaría como trabajadas
+    las horas de una pestaña olvidada abierta, y además se perdería si el
+    proceso se reinicia a mitad de turno. Acumular deja el dato en la base
+    después de cada latido, ya cerrado.
+
+    Los cortes se guardan aparte y no se descuentan en silencio: que a alguien
+    se le caiga internet media hora es información para quien supervisa, no una
+    penalización que aplicar sin decirlo.
+    """
+
+    __tablename__ = "work_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Último latido recibido. Es también el final del turno cuando se cierra
+    # por inactividad, porque es el último momento del que hay constancia.
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    # Nulo mientras el turno sigue abierto.
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # 'salida' si cerró sesión, 'inactividad' si dejó de dar señales.
+    closed_by: Mapped[str | None] = mapped_column(String(16))
+
+    active_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Cuántas veces se perdió la señal más allá de la tolerancia, y cuánto
+    # tiempo suman esos cortes.
+    gap_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    gap_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    user: Mapped["UserRow"] = relationship(back_populates="shifts")
+
+    __table_args__ = (
+        # "el turno de esta persona, del más reciente al más antiguo".
+        Index("ix_work_sessions_user_started", "user_id", started_at.desc()),
+        # Un solo turno abierto por persona. Dos pestañas son la misma jornada,
+        # y sin esto una reconexión mal cronometrada abriría un turno paralelo
+        # que duplicaría las horas.
+        Index(
+            "uq_work_sessions_abierto",
+            "user_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<WorkSessionRow {self.id} user={self.user_id}>"
 
 
 class CameraRow(Base):

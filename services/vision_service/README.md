@@ -39,6 +39,10 @@ o el atajo:
 | GET | `/api/video/meta` | fps, dimensiones, nº de frames, duración |
 | POST | `/api/auth/login` | correo y contraseña → token de sesión |
 | GET | `/api/auth/me` | perfil y permisos vigentes |
+| POST | `/api/shifts/heartbeat` | sigo en turno; suma el tiempo desde el latido anterior |
+| POST | `/api/shifts/close` | cierra el turno al salir |
+| GET | `/api/analytics/me` | mi turno, mis registros y mi tasa de validez |
+| GET | `/api/analytics/users` | el equipo: quién está en turno y cuánto lleva hoy (`analytics:read_all`) |
 | WS  | `/ws/inference?stride=N` | stream de inferencia (ver `../../ARCHITECTURE.md`) |
 
 ## Variables de entorno
@@ -58,6 +62,9 @@ o el atajo:
 | `VISION_CORS_ORIGINS` | `*` (lista separada por comas) |
 | `JWT_SECRET` | vacío. **Obligatorio** para iniciar sesión; mínimo 32 bytes. Generar con `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
 | `JWT_EXPIRE_MINUTES` | `720` (12 h, un turno completo) |
+| `SHIFT_GRACE_MINUTES` | `10` (silencio que se perdona antes de dejar de contar tiempo trabajado) |
+| `SHIFT_TIMEOUT_MINUTES` | `60` (a partir de aquí el turno se da por terminado) |
+| `VISION_TIMEZONE` | `America/Bogota` (dónde corta el día en el dashboard) |
 | `GEMINI_API_KEY` | vacío. Sin ella no se ofrece el resumen con IA; el resto del panel funciona igual |
 | `GEMINI_MODEL` | `gemini-2.5-flash` |
 | `GEMINI_TIMEOUT` | `30` segundos |
