@@ -11,7 +11,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en el .env}
       POSTGRES_DB: ${POSTGRES_DB:-traffic_detector}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     healthcheck:
       
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-traffic} -d ${POSTGRES_DB:-traffic_detector}"]
@@ -76,7 +76,7 @@ services:
      
       - evidence:/app/outputs
     ports:
-      - "${VISION_PORT:-8000}:8000"
+      - "${VISION_HOST_PORT:-8000}:8000"
 
 volumes:
   pgdata:
