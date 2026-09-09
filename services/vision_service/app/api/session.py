@@ -9,9 +9,9 @@ provides natural backpressure: if the browser cannot
 keep up, the worker thread blocks instead of piling
 frames in memory.
 
-Only ONE session is meant to be active at a time
-(ByteTrack keeps state on the shared YOLO model).
-The WebSocket route enforces that.
+Cada sesión lleva su propio tracker, así que varias pueden
+correr a la vez sin mezclarse los IDs. El límite de cuántas
+caben lo pone la ruta del WebSocket, no esta clase.
 """
 
 from __future__ import annotations
@@ -280,7 +280,6 @@ class VideoSession:
 
         frame_id = 0
         processed = 0
-        first = True
 
         try:
             while not self._stop.is_set():
@@ -300,9 +299,7 @@ class VideoSession:
                     frame=frame,
                     frame_id=frame_id,
                     timestamp=datetime.now(),
-                    persist_tracks=not first,
                 )
-                first = False
                 processed += 1
 
                 t = frame_id / self.fps

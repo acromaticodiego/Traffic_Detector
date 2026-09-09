@@ -1,14 +1,83 @@
+"""
+Seguimiento ByteTrack con estado propio por sesión.
+
+Antes esto era `model.track(persist=True)`. Ultralytics guarda ahí el estado
+del tracker colgado del modelo (`model.predictor.trackers`), que es un objeto
+compartido por todo el proceso: con una cámara funcionaba, con dos las dos
+sesiones escriben en el mismo tracker y los IDs se mezclan. Peor aún, el
+`persist=False` del primer frame de una sesión le borraba los tracks a la
+cámara que ya estaba corriendo.
+
+Ahora la detección sigue siendo compartida —un solo modelo cargado en la
+GPU— pero la asociación de tracks ocurre en un `BYTETracker` propio de cada
+instancia de esta clase, así que dos cámaras concurrentes no se ven entre sí.
+
+Esto usa clases internas de ultralytics (`BYTETracker`, `BaseTrack`), no su
+API pública. La versión está fijada en STACK.md justamente por eso: al
+subirla hay que releer este archivo.
+"""
+
+from __future__ import annotations
+
+import threading
+
 from ultralytics import YOLO
+from ultralytics.trackers.basetrack import BaseTrack
+from ultralytics.trackers.byte_tracker import BYTETracker
+from ultralytics.utils import YAML, IterableSimpleNamespace
+from ultralytics.utils.checks import check_yaml
 
 from ..detection.schemas import BoundingBox, Detection
+
+# El modelo YOLO es uno solo para todo el proceso y `predict()` reutiliza su
+# predictor interno, que no es reentrante. Con una sola GPU las inferencias de
+# varias cámaras se serializan de todas formas, así que el lock no cuesta
+# rendimiento: lo que evita es que dos hilos se pisen el predictor.
+_MODEL_LOCK = threading.Lock()
+
+_COUNTER_LOCK = threading.Lock()
+
+
+def _load_tracker_config(name: str) -> IterableSimpleNamespace:
+    """Los umbrales de ByteTrack, leídos del YAML que trae ultralytics."""
+
+    config = IterableSimpleNamespace(**YAML.load(check_yaml(name)))
+
+    if config.tracker_type != "bytetrack":
+        raise ValueError(
+            f"'{name}' configura un tracker '{config.tracker_type}'; "
+            f"esta clase solo implementa bytetrack."
+        )
+
+    return config
+
+
+def _new_bytetrack(config: IterableSimpleNamespace) -> BYTETracker:
+    """
+    Un BYTETracker nuevo que NO le reinicia los IDs a los que ya existen.
+
+    `BYTETracker.__init__` llama a `reset_id()`, que pone a cero
+    `BaseTrack._count`: un contador de CLASE, común a todo el proceso. Sin
+    esta salvaguarda, abrir una segunda cámara haría que la primera empezara a
+    repartir IDs que ya tiene asignados a tracks vivos, y sus tracks se
+    fusionarían entre sí. Preservando el contador, los IDs siguen creciendo y
+    además quedan únicos entre cámaras, que ayuda al leer los logs.
+    """
+
+    with _COUNTER_LOCK:
+        preserved = BaseTrack._count
+        tracker = BYTETracker(config)
+        BaseTrack._count = preserved
+
+    return tracker
 
 
 class ByteTrackTracker:
     """
     YOLO + ByteTrack tracker.
 
-    The YOLO model performs detection and tracking
-    in a single inference call per frame.
+    One YOLO inference per frame; the association runs
+    afterwards on this instance's own tracker state.
     """
 
     def __init__(
@@ -28,6 +97,9 @@ class ByteTrackTracker:
         self.image_size = image_size
         self.tracker = tracker
         self.device = device
+
+        self._config = _load_tracker_config(tracker)
+        self._tracker = _new_bytetrack(self._config)
 
         print(
             "ByteTrack configured."
@@ -60,97 +132,32 @@ class ByteTrackTracker:
     def update(
         self,
         frame,
-        persist: bool = True,
     ) -> list[Detection]:
         """
-        Run YOLO detection + ByteTrack on the
-        complete image.
+        Run YOLO detection on the complete image and
+        associate the boxes with this session's tracks.
 
         Only one model inference is performed
         per frame.
-
-        persist=True keeps the track IDs between
-        frames. Passing persist=False on the first
-        frame of a new run resets the internal
-        ByteTrack state (used when the same YOLO
-        model object is reused across sessions).
         """
 
-        results = self.model.track(
+        boxes = self._detect(frame)
 
-            source=frame,
+        if boxes is None:
+            return []
 
-            # YOLO input size
-            imgsz=self.image_size,
-
-            # Detection confidence
-            conf=self.confidence,
-
-            # NMS IoU
-            iou=self.iou,
-
-            # Keep track IDs between frames
-            persist=persist,
-
-            # ByteTrack
-            tracker=self.tracker,
-
-            # GPU
-            device=self.device,
-
-            verbose=False,
-        )
-
-        result = results[0]
+        # Se llama en TODOS los frames, también en los que no traen ninguna
+        # detección: el tracker cuenta frames para envejecer los tracks
+        # perdidos, y saltárselos alargaría artificialmente las oclusiones.
+        tracked = self._tracker.update(boxes, frame)
 
         detections: list[Detection] = []
 
-        if result.boxes is None:
-            return detections
+        # Cada fila es [x1, y1, x2, y2, track_id, score, class_id, índice de
+        # la detección de la que salió]; el índice aquí no hace falta.
+        for x1, y1, x2, y2, track_id, confidence, class_id, _index in tracked:
 
-        boxes = result.boxes
-
-        for box in boxes:
-
-            # ================================================
-            # CLASS
-            # ================================================
-
-            class_id = int(
-                box.cls[0].item()
-            )
-
-            # ================================================
-            # CONFIDENCE
-            # ================================================
-
-            confidence = float(
-                box.conf[0].item()
-            )
-
-            # ================================================
-            # BOUNDING BOX
-            # ================================================
-
-            x1, y1, x2, y2 = (
-                box.xyxy[0].tolist()
-            )
-
-            # ================================================
-            # TRACK ID
-            # ================================================
-
-            track_id = None
-
-            if box.id is not None:
-
-                track_id = int(
-                    box.id[0].item()
-                )
-
-            # ================================================
-            # DETECTION
-            # ================================================
+            class_id = int(class_id)
 
             detection = Detection(
 
@@ -160,7 +167,7 @@ class ByteTrackTracker:
                     class_id
                 ],
 
-                confidence=confidence,
+                confidence=float(confidence),
 
                 bbox=BoundingBox(
 
@@ -171,7 +178,7 @@ class ByteTrackTracker:
                     y2=float(y2),
                 ),
 
-                track_id=track_id,
+                track_id=int(track_id),
             )
 
             detections.append(
@@ -180,3 +187,53 @@ class ByteTrackTracker:
 
         return detections
 
+    # ========================================================
+    # DETECT
+    # ========================================================
+
+    def _detect(self, frame):
+        """
+        Las cajas crudas de YOLO, ya en CPU.
+
+        El paso a numpy va dentro del lock a propósito: lo que devuelve
+        ultralytics son tensores en la GPU, y soltarlo antes dejaría que la
+        siguiente inferencia toque memoria que todavía estamos leyendo.
+        """
+
+        with _MODEL_LOCK:
+
+            results = self.model.predict(
+
+                source=frame,
+
+                imgsz=self.image_size,
+
+                conf=self.confidence,
+
+                iou=self.iou,
+
+                device=self.device,
+
+                verbose=False,
+            )
+
+            boxes = results[0].boxes
+
+            if boxes is None:
+                return None
+
+            return boxes.cpu().numpy()
+
+    # ========================================================
+    # RESET
+    # ========================================================
+
+    def reset(self) -> None:
+        """
+        Olvidar los tracks de esta sesión sin tocar los de las demás.
+
+        Se construye uno nuevo en vez de llamar a `reset()` del tracker porque
+        ese método también reinicia el contador global de IDs.
+        """
+
+        self._tracker = _new_bytetrack(self._config)

@@ -13,9 +13,9 @@ Protocol (server -> client):
 The camera is chosen with ?camera=<id> (see cameras.yaml); omitting it
 takes the first one in the registry.
 
-Still only one session at a time, whatever the camera: ByteTrack keeps its
-state on the shared YOLO model, so two concurrent sessions would corrupt each
-other's tracks. Switching camera therefore restarts the pipeline.
+Por ahora sigue habiendo una sola sesión a la vez, aunque ya no por una
+limitación del tracker —cada sesión tiene el suyo— sino porque el registro de
+sesiones por cámara todavía no está. Cambiar de cámara reinicia el pipeline.
 """
 
 from __future__ import annotations
