@@ -40,6 +40,7 @@ from .pipeline import build_vision_engine
 from .protocol import PROTOCOL_VERSION
 from ..db.incident_writer import incident_writer
 from .serializers import event_to_dict, incident_to_dict, track_to_dict
+from .playback import Playback
 from .subscribers import Subscriber
 from .traffic_level import TrafficLevelEstimator
 
@@ -67,6 +68,9 @@ class VideoSession:
         # hasta abrir la fuente.
         self._engine = None
 
+        # Igual que el motor: depende de los fps, que no se saben hasta abrir.
+        self._playback: Optional[Playback] = None
+
         # Every scene knob comes from the camera, not from the global config:
         # two cameras in the same deployment have different geometry, so
         # sharing one ROI or one threshold gives one of them a wrong level.
@@ -89,7 +93,9 @@ class VideoSession:
         self._thread: Optional[threading.Thread] = None
 
         self.fps: float = _DEFAULT_FPS
-        self.frame_count: int = 0
+
+        # None cuando la fuente no tiene final que contar.
+        self.frame_count: Optional[int] = None
         self.width: int = 0
         self.height: int = 0
 
@@ -97,6 +103,9 @@ class VideoSession:
         # cámara: el mensaje `done` y, más adelante, las métricas.
         self.frames_read: int = 0
         self.frames_processed: int = 0
+
+        # Cuántas veces se ha rebobinado el archivo.
+        self.laps: int = 0
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -110,7 +119,9 @@ class VideoSession:
 
         source = self._camera.source
 
-        if not source.exists():
+        # A una URL no se le pregunta por el disco: si la cámara no responde,
+        # se sabrá al abrirla, unas líneas más abajo.
+        if not self._camera.is_stream and not source.exists():
             raise FileNotFoundError(
                 f"Fuente no encontrada para '{self._camera.id}': {source}"
             )
@@ -129,7 +140,14 @@ class VideoSession:
 
         self._cap = cap
         self.fps = float(fps)
-        self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        self._playback = Playback(
+            is_stream=self._camera.is_stream,
+            loop_enabled=settings.loop_source,
+            fps=self.fps,
+        )
+
+        self.frame_count = self._playback.frame_count(self._reported_frames(cap))
         self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
@@ -152,6 +170,8 @@ class VideoSession:
             "protocol": PROTOCOL_VERSION,
             "camera": self._camera.public(),
             "fps": self.fps,
+            # null en una fuente en vivo: no tiene final que contar. El
+            # frontend lo distingue de un 0, que significaría video vacío.
             "frame_count": self.frame_count,
             "width": self.width,
             "height": self.height,
@@ -166,6 +186,20 @@ class VideoSession:
         }
 
         return self.meta
+
+    @staticmethod
+    def _reported_frames(cap: cv2.VideoCapture) -> int:
+        """Lo que opencv dice que dura la fuente, saneado.
+
+        Con un stream responde cualquier cosa —cero, un negativo, un NaN— y
+        `int(nan)` revienta."""
+
+        reported = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+
+        if not reported or math.isnan(reported):
+            return 0
+
+        return int(reported)
 
     def _ground_plane(self) -> Optional[GroundPlane]:
         """
@@ -315,7 +349,10 @@ class VideoSession:
         honesto, en vez de fingir que va al día.
         """
 
-        if self.fps <= 0:
+        if self.fps <= 0 or self._playback is None:
+            return
+
+        if not self._playback.paced:
             return
 
         ahead = (started + frame_id / self.fps) - time.monotonic()
@@ -324,11 +361,49 @@ class VideoSession:
             # `wait` y no `sleep` para que parar la sesión sea inmediato.
             self._stop.wait(timeout=ahead)
 
+    def _rewind(self, cap: cv2.VideoCapture) -> bool:
+        """
+        Volver al principio del archivo. False si no toca o no se pudo.
+
+        La comprobación con `grab` no sobra: un archivo truncado acepta el
+        salto y sigue sin devolver frames, y eso sería un bucle vacío girando
+        a toda velocidad sin que nadie lo note.
+        """
+
+        if self._playback is None or not self._playback.loops:
+            return False
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        if not cap.grab():
+            logger.warning(
+                "No se pudo rebobinar la fuente de '%s'; se cierra la sesión.",
+                self._camera.id,
+            )
+            return False
+
+        # `grab` ya consumió el primer frame: hay que dejarlo otra vez ahí.
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        self.laps += 1
+
+        logger.info(
+            "La fuente de '%s' volvió a empezar (vuelta %d).",
+            self._camera.id,
+            self.laps,
+        )
+
+        return True
+
     def _process_video(self) -> None:
         cap = self._cap
         assert cap is not None
 
+        # `frame_id` no se reinicia nunca: identifica el frame dentro de la
+        # sesión, y el escritor de incidentes lo usa para no confundir dos
+        # pasadas. `pass_frame` sí, porque es la posición dentro del video.
         frame_id = 0
+        pass_frame = 0
         processed = 0
         started = time.monotonic()
 
@@ -338,9 +413,14 @@ class VideoSession:
                 ok, frame = cap.read()
 
                 if not ok:
-                    break
+                    if not self._rewind(cap):
+                        break
+
+                    pass_frame = 0
+                    continue
 
                 frame_id += 1
+                pass_frame += 1
                 self.frames_read = frame_id
 
                 # El ritmo se marca sobre los frames leídos, no sobre los
@@ -359,7 +439,10 @@ class VideoSession:
                 processed += 1
                 self.frames_processed = processed
 
-                t = frame_id / self.fps
+                t = self._playback.timestamp(
+                    pass_frame,
+                    time.monotonic() - started,
+                )
 
                 motion_by_id = {
                     m.track_id: m for m in result.motion
@@ -418,4 +501,6 @@ class VideoSession:
             self._broadcast({"type": "error", "message": str(error)})
             return
 
-        self._broadcast(self._done_message())
+        # Que un archivo se acabe es el final esperado; que una cámara en vivo
+        # deje de mandar es una avería. No es el mismo mensaje.
+        self._broadcast(self._playback.end_message(frame_id, processed))

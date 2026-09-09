@@ -40,6 +40,19 @@ def _resolve(camera_id: str | None) -> Camera:
             status_code=404, detail=f"Cámara desconocida: {camera_id}"
         )
 
+    # Una cámara en vivo no tiene archivo que servir ni descargar. El
+    # frontend usa esta ruta para el <video> de fondo, así que la respuesta
+    # tiene que explicarlo en vez de reventar con un 500 al pedirle `.exists()`
+    # a una URL.
+    if camera.is_stream:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"'{camera.id}' es una cámara en vivo: no hay archivo de "
+                f"video que servir, solo el stream de inferencia."
+            ),
+        )
+
     if not camera.source.exists():
         raise HTTPException(
             status_code=404,

@@ -178,6 +178,15 @@ class Settings:
         default_factory=lambda: max(1, _env_int("VISION_MAX_SESSIONS", 3))
     )
 
+    # Volver a empezar cuando se acaba el archivo. Existe porque no hay
+    # acceso a las cámaras reales y todo se prueba sobre grabaciones: un clip
+    # en bucle es lo más parecido a un stream continuo que se puede tener sin
+    # RTSP, y sin esto una demo se queda congelada al minuto. No afecta a las
+    # fuentes en vivo, que no se rebobinan.
+    loop_source: bool = field(
+        default_factory=lambda: _env_bool("VISION_LOOP_SOURCE", False)
+    )
+
     cors_origins: list[str] = field(default_factory=_cors_origins)
 
     # ------------------------------------------------------------------
@@ -326,6 +335,7 @@ class Settings:
             "image_size": self.image_size,
             "frame_stride": self.frame_stride,
             "max_sessions": self.max_sessions,
+            "loop_source": self.loop_source,
             "cors_origins": self.cors_origins,
             "evidence_enabled": self.evidence_enabled,
             "evidence_dir": str(self.evidence_dir),

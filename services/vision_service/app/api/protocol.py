@@ -13,6 +13,8 @@ la suya y avisa si no coinciden.
 Historial:
     1 -> nivel de tráfico por conteo de vehículos
     2 -> ocupación de calzada + velocidad, ROI por cámara, meta.camera
+    3 -> multi-cámara: meta.frame_count puede ser null (fuente en vivo, que
+         no tiene final que contar)
 """
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
