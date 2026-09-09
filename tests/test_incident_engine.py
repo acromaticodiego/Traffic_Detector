@@ -487,3 +487,82 @@ def test_reset_deja_el_motor_como_recien_creado():
     feed(engine, track, MOVING, frames=1, abrupt=True)
 
     assert len(feed(engine, track, STOPPED, frames=25)) == 1
+
+
+class TestOlvido:
+    """
+    Lo que se guarda entre oclusiones tiene que vencer.
+
+    `_speed_peak`, `_stopped_reported` y `collision_pairs` se conservan a
+    propósito cuando un track desaparece unos frames. Sin vencimiento eso es
+    una fuga: una entrada por cada vehículo que pasa, en una cámara que con la
+    fuente en bucle puede llevar semanas abierta.
+    """
+
+    def vacio(self, engine, frames):
+        """Frames sin ningún track, como cuando la vía queda despejada."""
+
+        for _ in range(frames):
+            engine.process([], [])
+
+    def test_lo_que_ya_no_puede_volver_se_olvida(self):
+        engine = IncidentEngine()
+
+        feed(engine, make_track(1), MOVING, frames=5)
+
+        assert 1 in engine._speed_peak
+
+        self.vacio(engine, engine.FORGET_AFTER_FRAMES + engine.FORGET_EVERY_FRAMES)
+
+        assert engine._speed_peak == {}
+        assert engine._last_seen == {}
+
+    def test_una_oclusion_corta_no_borra_nada(self):
+        # Un vehículo tapado por un bus vuelve con el mismo id: si se le
+        # olvida que ya se movió, deja de poder reportarse como detenido.
+        engine = IncidentEngine()
+
+        feed(engine, make_track(1), MOVING, frames=5)
+
+        self.vacio(engine, engine.FORGET_EVERY_FRAMES * 2)
+
+        assert engine._ever_moved(1)
+
+    def test_las_parejas_de_colision_tambien_vencen(self):
+        engine = IncidentEngine()
+
+        feed(engine, make_track(1), MOVING, frames=1)
+        engine.collision_pairs.add((1, 2))
+
+        self.vacio(engine, engine.FORGET_AFTER_FRAMES + engine.FORGET_EVERY_FRAMES)
+
+        assert engine.collision_pairs == set()
+
+    def test_una_pareja_sobrevive_mientras_sus_dos_vehiculos_sigan_ahi(self):
+        engine = IncidentEngine()
+
+        engine.collision_pairs.add((1, 2))
+
+        for _ in range(engine.FORGET_AFTER_FRAMES + engine.FORGET_EVERY_FRAMES):
+            engine.process(
+                [make_track(1), make_track(2)],
+                [make_motion(1, speed=MOVING), make_motion(2, speed=MOVING)],
+            )
+
+        assert (1, 2) in engine.collision_pairs
+
+    def test_el_estado_no_crece_sin_techo(self):
+        # Tráfico continuo con vehículos siempre distintos, que es lo que
+        # hace una cámara real: cada uno pasa y no vuelve.
+        engine = IncidentEngine()
+
+        for track_id in range(1, 400):
+            engine.process(
+                [make_track(track_id)],
+                [make_motion(track_id, speed=MOVING)],
+            )
+
+        techo = engine.FORGET_AFTER_FRAMES + engine.FORGET_EVERY_FRAMES
+
+        assert len(engine._speed_peak) <= techo
+        assert len(engine._last_seen) <= techo
