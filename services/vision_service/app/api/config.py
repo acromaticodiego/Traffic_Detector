@@ -168,6 +168,16 @@ class Settings:
         default_factory=lambda: max(1, _env_int("VISION_FRAME_STRIDE", 1))
     )
 
+    # Cuántas cámaras pueden estar procesándose a la vez. Todas comparten una
+    # sola GPU, así que pasada cierta cantidad no se gana nada: se reparten los
+    # mismos frames por segundo entre más streams y TODAS van peor, sin que
+    # nada lo explique. Es preferible negar la cuarta cámara con un mensaje
+    # claro. Los espectadores no cuentan: diez operarios sobre las mismas tres
+    # cámaras siguen siendo tres sesiones.
+    max_sessions: int = field(
+        default_factory=lambda: max(1, _env_int("VISION_MAX_SESSIONS", 3))
+    )
+
     cors_origins: list[str] = field(default_factory=_cors_origins)
 
     # ------------------------------------------------------------------
@@ -315,6 +325,7 @@ class Settings:
             "iou": self.iou,
             "image_size": self.image_size,
             "frame_stride": self.frame_stride,
+            "max_sessions": self.max_sessions,
             "cors_origins": self.cors_origins,
             "evidence_enabled": self.evidence_enabled,
             "evidence_dir": str(self.evidence_dir),

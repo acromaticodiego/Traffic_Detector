@@ -60,6 +60,11 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Las cámaras corren en hilos daemon, así que morirían solas con el
+    # proceso; pararlas a mano libera las capturas y, con RTSP, cierra la
+    # conexión en vez de dejarla colgada del lado de la cámara.
+    await inference.stop_all()
+
     incident_writer.stop()
     app.state.detector = None
 
