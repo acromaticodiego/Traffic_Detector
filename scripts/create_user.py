@@ -30,6 +30,11 @@ sys.path.insert(0, str(REPO_ROOT / "services" / "vision_service"))
 
 from sqlalchemy import select  # noqa: E402
 
+from app.auth.identity import (  # noqa: E402
+    IdentityError,
+    clean_cedula,
+    clean_phone,
+)
 from app.auth.passwords import PasswordError, hash_password  # noqa: E402
 from app.db.models import RoleRow, UserRow  # noqa: E402
 from app.db.session import session_scope  # noqa: E402
@@ -58,6 +63,8 @@ def main() -> None:
     parser.add_argument("--role", required=True,
                         help="admin, operario o analista")
     parser.add_argument("--name", default="", help="Nombre para mostrar")
+    parser.add_argument("--cedula", default="", help="Cedula (solo digitos)")
+    parser.add_argument("--phone", default="", help="Telefono")
     parser.add_argument("--deactivate", action="store_true",
                         help="Desactiva la cuenta en vez de crearla")
     args = parser.parse_args()
@@ -93,6 +100,17 @@ def main() -> None:
         except PasswordError as error:
             raise SystemExit(str(error))
 
+        if existente is None and not args.cedula:
+            raise SystemExit(
+                "Falta --cedula: es obligatoria para crear una cuenta nueva."
+            )
+
+        try:
+            cedula = clean_cedula(args.cedula) if args.cedula else ""
+            phone = clean_phone(args.phone, required=False)
+        except IdentityError as error:
+            raise SystemExit(str(error))
+
         if existente is None:
             session.add(
                 UserRow(
@@ -100,6 +118,8 @@ def main() -> None:
                     full_name=args.name or email.split("@")[0],
                     password_hash=hashed,
                     role_name=rol.name,
+                    cedula=cedula,
+                    phone=phone,
                 )
             )
             print(f"+ creado       {email}  ({rol.name})")
@@ -109,6 +129,10 @@ def main() -> None:
             existente.active = True
             if args.name:
                 existente.full_name = args.name
+            if cedula:
+                existente.cedula = cedula
+            if phone:
+                existente.phone = phone
             print(f"~ actualizado  {email}  ({rol.name})")
 
         print()

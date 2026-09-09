@@ -26,4 +26,9 @@ fastapi==0.141.1
 # no se nota hasta que alguien entra sin permiso.
 PyJWT==2.13.0
 bcrypt==5.0.0
+
+# Base de datos horaria para `zoneinfo`. Linux la trae del sistema, así que el
+# CI pasaría sin ella; Windows no, y ahí la suite ni siquiera arranca. Va
+# fijada para que correr los tests dé lo mismo en las dos plataformas.
+tzdata==2026.3
 sqlalchemy==2.0.52

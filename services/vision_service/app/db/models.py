@@ -144,6 +144,16 @@ class UserRow(Base):
 
     full_name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
 
+    # Cédula. Se guarda solo con dígitos —la gente la escribe como
+    # "1.234.567.890", "1 234 567 890" o "1234567890" y las tres son la misma
+    # persona— y es única: dos cuentas con la misma cédula significan que
+    # alguien duplicó a un empleado.
+    cedula: Mapped[str] = mapped_column(String(20), nullable=False, unique=True)
+
+    # Teléfono, también normalizado a dígitos. No es único a propósito: un
+    # celular corporativo puede estar compartido por el turno.
+    phone: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+
     # El hash bcrypt, nunca la contraseña. Si esta tabla se filtra, lo que se
     # filtra son hashes: recuperar las contraseñas de ahí cuesta años por
     # cuenta, que es exactamente el punto de usar bcrypt y no un SHA.
