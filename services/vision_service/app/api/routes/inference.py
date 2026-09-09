@@ -21,16 +21,48 @@ other's tracks. Switching camera therefore restarts the pipeline.
 from __future__ import annotations
 
 import asyncio
+import logging
+from typing import Optional
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
+from ...auth.dependencies import CurrentUser, load_user
+from ...db.models import PERM_STREAM_VIEW
+from ...db.session import session_scope
 from ..cameras import get_camera
 from ..session import VideoSession
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["inference"])
 
 _active: VideoSession | None = None
 _lock = asyncio.Lock()
+
+
+def _authenticate(websocket: WebSocket) -> Optional[CurrentUser]:
+    """El usuario del token de la query, o None si no vale."""
+
+    token = websocket.query_params.get("token", "").strip()
+
+    if not token:
+        return None
+
+    try:
+        with session_scope() as session:
+            user = CurrentUser(load_user(session, token))
+    except HTTPException:
+        return None
+    except Exception as error:  # noqa: BLE001
+        logger.warning("No se pudo validar la sesión del WS: %s", error)
+        return None
+
+    # Ver el stream es un permiso aparte: un rol podría tener acceso al
+    # histórico sin poder abrir la cámara en vivo.
+    if not user.can(PERM_STREAM_VIEW):
+        return None
+
+    return user
 
 
 def _parse_stride(websocket: WebSocket) -> int | None:
@@ -50,6 +82,31 @@ async def inference_ws(websocket: WebSocket) -> None:
     global _active
 
     await websocket.accept()
+
+    # --------------------------------------------------------------
+    # Autenticación
+    # --------------------------------------------------------------
+    # El token viaja en la query y no en una cabecera porque la API de
+    # WebSocket del navegador no permite mandar cabeceras propias al abrir la
+    # conexión: no hay forma de enviar `Authorization`. Es una concesión
+    # conocida y acotada — la URL puede quedar en logs del servidor, así que
+    # el token dura poco y esta es la única ruta que lo acepta así.
+    #
+    # Se acepta primero y se rechaza después, en vez de cerrar antes del
+    # handshake, para poder mandar un mensaje de error que el frontend
+    # entienda en vez de una desconexión muda.
+    user = _authenticate(websocket)
+
+    if user is None:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "Sesión inválida o vencida. Vuelve a entrar.",
+                "code": "unauthorized",
+            }
+        )
+        await websocket.close()
+        return
 
     detector = websocket.app.state.detector
     loop = asyncio.get_running_loop()

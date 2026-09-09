@@ -171,6 +171,25 @@ class Settings:
     cors_origins: list[str] = field(default_factory=_cors_origins)
 
     # ------------------------------------------------------------------
+    # Autenticación
+    # ------------------------------------------------------------------
+    # Con este secreto se firman los tokens de sesión. Quien lo tenga puede
+    # fabricar un token de admin, así que va en el .env y nunca en el código.
+    # Sin él el servicio arranca pero rechaza todo inicio de sesión: es
+    # preferible a arrancar con un secreto por defecto que alguien olvide
+    # cambiar, que es como se filtran estos sistemas.
+    jwt_secret: str = field(
+        default_factory=lambda: _env_str("JWT_SECRET", "")
+    )
+
+    # Cuánto dura una sesión. Un JWT no se puede revocar antes de expirar,
+    # así que esto acota el daño de un token robado. 12 horas cubre un turno
+    # completo sin obligar a reingresar a media jornada.
+    jwt_expire_minutes: int = field(
+        default_factory=lambda: _env_int("JWT_EXPIRE_MINUTES", 720)
+    )
+
+    # ------------------------------------------------------------------
     # Resumen con IA (Gemini)
     # ------------------------------------------------------------------
     # La clave NO tiene valor por defecto y nunca se escribe en el código:
@@ -277,6 +296,9 @@ class Settings:
             "evidence_dir": str(self.evidence_dir),
             # Solo si hay clave o no. El valor jamás se registra ni se
             # devuelve por /health.
+            # Solo si hay secreto o no. El valor jamás se registra.
+            "auth_configured": bool(self.jwt_secret),
+            "jwt_expire_minutes": self.jwt_expire_minutes,
             "gemini_configured": bool(self.gemini_api_key),
             "gemini_model": self.gemini_model,
             # redacted: describe() goes to the log on every startup
