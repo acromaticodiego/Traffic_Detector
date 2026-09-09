@@ -1,0 +1,25 @@
+# Lo que no tiene por qué entrar en el contexto de build. Sin esto, `docker
+# build` empieza copiando el .venv y los videos: gigas que solo sirven para
+# que cada construcción tarde minutos.
+
+.venv/
+.git/
+__pycache__/
+*.pyc
+
+# Secretos. NUNCA dentro de la imagen: la clave de Gemini, el JWT_SECRET y la
+# contraseña de Postgres se pasan como variables de entorno.
+.env
+.env.*
+!.env.example
+
+# Se montan como volúmenes, no se hornean.
+models/
+videos/
+outputs/
+
+# Del frontend y de las herramientas.
+node_modules/
+.pytest_cache/
+.ruff_cache/
+dist/

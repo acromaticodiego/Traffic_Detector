@@ -170,6 +170,30 @@ class IncidentEngine:
     }
 
     # ==========================================
+    # CONFIGURATION - olvido
+    # ==========================================
+    #
+    # Tres estructuras tienen que sobrevivir a que un track desaparezca unos
+    # frames: si un vehículo se pierde tras un bus y vuelve, no puede
+    # reportarse otra vez ni dejar de constar que ya se movió. Por eso NO se
+    # limpian junto con las demás.
+    #
+    # Pero "sobrevivir a una oclusión" no es "guardarse para siempre". Sin
+    # vencimiento crecen mientras el proceso viva, y ahora las sesiones no
+    # terminan nunca: con la fuente en bucle una cámara puede llevar semanas
+    # abierta, y los track_id ya no se reinician entre cámaras.
+    #
+    # El plazo es holgado a propósito. ByteTrack descarta un track perdido a
+    # los 30 frames y los id nunca se reutilizan, así que pasado ese punto un
+    # id no puede volver: 300 frames son diez veces ese margen.
+    FORGET_AFTER_FRAMES = 300
+
+    # Cada cuántos frames se pasa el olvido. No hace falta cada frame —el
+    # plazo se mide en cientos— y recorrer las parejas de colisión en cada
+    # uno sería trabajo repetido dentro del bucle de visión.
+    FORGET_EVERY_FRAMES = 60
+
+    # ==========================================
     # INIT
     # ==========================================
 
@@ -222,6 +246,10 @@ class IncidentEngine:
 
         # Tracks already reported as stopped (cleared when moving again).
         self._stopped_reported: set[int] = set()
+
+        # Último frame en que se vio cada track. Es lo que permite olvidar lo
+        # que ya no puede volver, sin perder lo que solo está tapado.
+        self._last_seen: dict[int, int] = {}
 
     # ==========================================
     # GEOMETRY HELPERS
@@ -363,6 +391,7 @@ class IncidentEngine:
         for track in tracks:
 
             active_ids.add(track.track_id)
+            self._last_seen[track.track_id] = self._frame
 
             motion = motion_by_id.get(track.track_id)
 
@@ -423,7 +452,49 @@ class IncidentEngine:
             self._abrupt_recency.pop(track_id, None)
             self._still_frames.pop(track_id, None)
             self._stop_was_abrupt.pop(track_id, None)
-            # _speed_peak and _stopped_reported are kept on purpose
+            # _speed_peak y _stopped_reported NO se tocan aquí: tienen que
+            # sobrevivir a una oclusión. Vencen aparte, mucho más tarde.
+
+        self._forget_stale()
+
+    def _forget_stale(self) -> None:
+        """
+        Soltar lo que se guarda de tracks que ya no pueden volver.
+
+        `_speed_peak`, `_stopped_reported` y `collision_pairs` se conservan a
+        propósito cuando un track desaparece, porque puede estar tapado unos
+        frames. El problema nunca fue conservarlos, era que no vencían: en una
+        cámara que lleva semanas abierta eso es una fuga lenta, una entrada por
+        cada vehículo que ha pasado por la vía.
+
+        Una pareja de colisión se olvida en cuanto se olvida cualquiera de sus
+        dos vehículos: sin uno de los dos, esa pareja no se puede repetir.
+        """
+
+        if self._frame % self.FORGET_EVERY_FRAMES:
+            return
+
+        horizon = self._frame - self.FORGET_AFTER_FRAMES
+
+        stale = {
+            track_id
+            for track_id, seen in self._last_seen.items()
+            if seen < horizon
+        }
+
+        if not stale:
+            return
+
+        for track_id in stale:
+            self._last_seen.pop(track_id, None)
+            self._speed_peak.pop(track_id, None)
+            self._stopped_reported.discard(track_id)
+
+        self.collision_pairs = {
+            pair
+            for pair in self.collision_pairs
+            if pair[0] not in stale and pair[1] not in stale
+        }
 
     # ==========================================
     # STOPPED VEHICLE
@@ -453,6 +524,20 @@ class IncidentEngine:
                 continue
 
             if not self._ever_moved(track_id):
+                continue
+
+            # Esta parada ya está contada: ES el desenlace del choque que ya
+            # se reportó, no un incidente aparte. Sin esto, un choque que
+            # inmoviliza a dos vehículos sale como TRES incidentes —la
+            # colisión y una parada por cabeza— y quien abre la bandeja ve un
+            # sistema que no sabe contar. La información no se pierde: el
+            # incidente de colisión lleva a los dos implicados y su desenlace.
+            if self._explained_by_collision(track_id):
+                # Se marca como reportada aunque no se emita nada. Si no, al
+                # caducar el cluster unos segundos después el vehículo seguiría
+                # quieto y la parada saldría entonces: el mismo duplicado, solo
+                # que más tarde y más difícil de relacionar.
+                self._stopped_reported.add(track_id)
                 continue
 
             abrupt_stop = self._stop_was_abrupt.get(track_id, False)
@@ -895,6 +980,30 @@ class IncidentEngine:
 
         return min(raw, self.UNCONFIRMED_CAP)
 
+    def _explained_by_collision(self, track_id: int) -> bool:
+        """
+        Si la parada de este vehículo ya la explica una colisión reportada.
+
+        Se exige la MISMA relación que usa la confirmación por desenlace: que
+        la parada haya empezado a raíz del incidente. Un vehículo que ya
+        estaba detenido antes del contacto no queda tapado por él —su parada
+        es un hecho independiente— y se reporta como siempre.
+        """
+
+        still = self._still_frames.get(track_id, 0)
+
+        if not still:
+            return False
+
+        stop_started = self._frame - still
+
+        return any(
+            track_id in cluster["track_ids"]
+            and stop_started
+            >= cluster["first_frame"] - self.AFTERMATH_STOP_TOLERANCE
+            for cluster in self._clusters
+        )
+
     def _stopped_since_incident(self, cluster: dict) -> bool:
         """
         Si alguno de los implicados se quedó quieto A RAÍZ del incidente.
@@ -1083,3 +1192,4 @@ class IncidentEngine:
         self._still_frames.clear()
         self._stop_was_abrupt.clear()
         self._stopped_reported.clear()
+        self._last_seen.clear()

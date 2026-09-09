@@ -23,12 +23,55 @@ from fastapi.middleware.cors import CORSMiddleware
 from .cameras import list_cameras, registry_source
 from .config import config_fingerprint, redact_url, settings
 from ..db.incident_writer import incident_writer
+from ..incidents.retention import run_retention
 from .protocol import PROTOCOL_VERSION
 from .pipeline import create_detector
-from .routes import analytics, auth, cameras, incidents, inference, shifts, users, video
+from .routes import (
+    analytics,
+    auth,
+    cameras,
+    incidents,
+    inference,
+    metrics,
+    shifts,
+    users,
+    video,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("vision_service")
+
+# Cada cuánto se revisa si hay evidencia vencida. Seis horas: el plazo se mide
+# en días, así que revisar más seguido no adelanta nada, y menos seguido
+# dejaría un servicio de fin de semana sin limpiar hasta el lunes.
+_RETENTION_INTERVAL_SECONDS = 6 * 60 * 60
+
+
+async def _retention_loop() -> None:
+    """
+    Borra la evidencia vencida cada pocas horas, mientras el servicio viva.
+
+    Corre en un hilo aparte porque recorre directorios y habla con Postgres, y
+    el bucle de asyncio está atendiendo cámaras. Un fallo aquí se registra y se
+    reintenta: quedarse sin limpiar unas horas es molesto, pero tumbar el
+    servicio por la limpieza sería mucho peor.
+    """
+
+    while True:
+        try:
+            await asyncio.to_thread(
+                run_retention,
+                settings.evidence_dir,
+                settings.evidence_retention_days,
+                settings.retention_dry_run,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "La limpieza de evidencia falló; se reintenta en la próxima "
+                "pasada."
+            )
+
+        await asyncio.sleep(_RETENTION_INTERVAL_SECONDS)
 
 
 def _quiet_connection_reset(loop, context):
@@ -58,7 +101,18 @@ async def lifespan(app: FastAPI):
 
     logger.info("Model ready. Classes: %s", app.state.detector.model.names)
 
+    # Una pasada al arrancar y luego cada pocas horas. Al arrancar porque un
+    # servicio que estuvo apagado una semana vuelve con evidencia vencida.
+    retention = asyncio.create_task(_retention_loop())
+
+    # Vigila el ritmo de las cámaras y lo deja escrito en el log. Sin esto,
+    # una cámara que se queda atrás de la calle no se nota desde ningún lado.
+    watchdog = asyncio.create_task(metrics.watchdog())
+
     yield
+
+    retention.cancel()
+    watchdog.cancel()
 
     # Las cámaras corren en hilos daemon, así que morirían solas con el
     # proceso; pararlas a mano libera las capturas y, con RTSP, cierra la
@@ -83,6 +137,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+if _allow_all:
+    # Se avisa y no se bloquea: el comodín es cómodo en desarrollo y romperlo
+    # por sorpresa sería peor. Pero desde que hay login esto ya no es inocuo,
+    # así que tiene que constar: cualquier página que un operario abra puede
+    # llamar a esta API, y el token viaja en la query del WebSocket.
+    logger.warning(
+        "CORS abierto a cualquier origen: VISION_CORS_ORIGINS no está fijado. "
+        "En un despliegue real hay que listar los orígenes permitidos."
+    )
+
 app.include_router(auth.router)
 app.include_router(shifts.router)
 app.include_router(analytics.router)
@@ -91,6 +155,7 @@ app.include_router(cameras.router)
 app.include_router(incidents.router)
 app.include_router(video.router)
 app.include_router(inference.router)
+app.include_router(metrics.router)
 
 
 @app.get("/health")

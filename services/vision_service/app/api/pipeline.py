@@ -88,6 +88,9 @@ def build_vision_engine(
         IncidentEvidence(
             output_dir=settings.evidence_dir,
             scope=camera_id,
+            anonymize=settings.anonymize_evidence,
+            plate_band=settings.anonymize_plate_band,
+            face_band=settings.anonymize_face_band,
         )
         if settings.evidence_enabled
         else None

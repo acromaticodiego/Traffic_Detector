@@ -246,14 +246,26 @@ class Settings:
     # Configurable a propósito: los identificadores de modelo de Google
     # cambian, y quedarse fijado a uno retirado convierte un cambio de
     # proveedor en un cambio de código.
+    #
+    # Por defecto va un ALIAS y no una versión concreta. No es descuido: el
+    # `gemini-2.5-flash` que estaba aquí antes fue retirado y la función se
+    # cayó con un 404 en producción. Un alias se mueve solo cuando Google
+    # jubila el modelo de debajo. A cambio, el modelo puede cambiar sin aviso
+    # y con él el tono del resumen: para reproducibilidad, fijar una versión
+    # concreta aquí y aceptar tener que actualizarla.
     gemini_model: str = field(
-        default_factory=lambda: _env_str("GEMINI_MODEL", "gemini-2.5-flash")
+        default_factory=lambda: _env_str("GEMINI_MODEL", "gemini-flash-latest")
     )
 
     # Segundos antes de rendirse. Una petición colgada no puede dejar
     # esperando al agente que abrió el incidente.
+    #
+    # 30 se quedaban cortos: los modelos actuales razonan antes de responder y
+    # el SDK reintenta por su cuenta, así que una llamada legítima puede pasar
+    # del medio minuto. Con el valor viejo el agente recibía un timeout en vez
+    # del motivo real del fallo.
     gemini_timeout: float = field(
-        default_factory=lambda: _env_float("GEMINI_TIMEOUT", 30.0)
+        default_factory=lambda: _env_float("GEMINI_TIMEOUT", 60.0)
     )
 
     # Evidencia de los incidentes: por cada uno se guarda el frame original y
@@ -272,6 +284,53 @@ class Settings:
                 str(REPO_ROOT / "outputs" / "incidents"),
             )
         )
+    )
+
+    # ------------------------------------------------------------------
+    # Anonimización de la evidencia (Ley 1581 de 2012, Habeas Data)
+    # ------------------------------------------------------------------
+    # Placas y rostros se tapan ANTES de escribir la imagen, así que el
+    # original identificable no llega a existir en disco. Va encendido por
+    # defecto porque el descuido aquí no se nota hasta que lo encuentra un
+    # abogado: apagarlo es una decisión que alguien tiene que tomar a
+    # conciencia, no algo que pase por olvido.
+    anonymize_evidence: bool = field(
+        default_factory=lambda: _env_bool("VISION_ANONYMIZE", True)
+    )
+
+    # Qué fracción de cada caja se tapa: abajo la placa, arriba la cabeza. Se
+    # pueden ajustar porque dependen del ángulo de la cámara —una toma más
+    # cenital ve la placa más arriba dentro del recuadro—, pero conviene
+    # moverlas hacia arriba, no hacia abajo: quedarse corto deja una placa
+    # legible guardada para siempre.
+    anonymize_plate_band: float = field(
+        default_factory=lambda: _env_float("VISION_ANONYMIZE_PLATE_BAND", 0.35)
+    )
+
+    anonymize_face_band: float = field(
+        default_factory=lambda: _env_float("VISION_ANONYMIZE_FACE_BAND", 0.30)
+    )
+
+    # ------------------------------------------------------------------
+    # Retención de la evidencia
+    # ------------------------------------------------------------------
+    # Cuántos días se conserva la imagen de un incidente. El incidente en sí
+    # NO se borra nunca: sigue en la bandeja con su veredicto, que es de donde
+    # sale la métrica de precisión. Lo que caduca es la foto, que es el dato
+    # personal.
+    #
+    # Cero o negativo = conservar indefinidamente, que es el valor por defecto
+    # a propósito: este número borra archivos, y una variable vacía o un typo
+    # tienen que dejar el disco intacto, nunca vaciarlo. Un despliegue real
+    # tiene que fijarlo a conciencia.
+    evidence_retention_days: int = field(
+        default_factory=lambda: _env_int("VISION_EVIDENCE_RETENTION_DAYS", 0)
+    )
+
+    # Registra qué borraría, sin borrar nada. Para mirar la primera pasada
+    # antes de soltarla sobre evidencia acumulada.
+    retention_dry_run: bool = field(
+        default_factory=lambda: _env_bool("VISION_RETENTION_DRY_RUN", False)
     )
 
     # Postgres. The +psycopg suffix picks the psycopg 3 driver explicitly;
@@ -339,6 +398,8 @@ class Settings:
             "cors_origins": self.cors_origins,
             "evidence_enabled": self.evidence_enabled,
             "evidence_dir": str(self.evidence_dir),
+            "anonymize_evidence": self.anonymize_evidence,
+            "evidence_retention_days": self.evidence_retention_days,
             # Solo si hay clave o no. El valor jamás se registra ni se
             # devuelve por /health.
             # Solo si hay secreto o no. El valor jamás se registra.

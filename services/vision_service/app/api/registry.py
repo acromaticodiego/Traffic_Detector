@@ -60,6 +60,18 @@ class SessionRegistry:
     def camera_ids(self) -> list[str]:
         return sorted(self._sessions)
 
+    def snapshot(self) -> list[tuple[str, Any]]:
+        """
+        Las sesiones vivas, para observabilidad.
+
+        Sin tomar el lock a propósito: solo lee, y la ruta de métricas no
+        puede quedarse esperando a que arranque una cámara. Como mucho ve el
+        registro un instante antes o después de un cambio, que para medir da
+        igual.
+        """
+
+        return sorted(self._sessions.items())
+
     # ------------------------------------------------------------------
 
     async def acquire(

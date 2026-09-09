@@ -110,6 +110,16 @@ async def stop_all() -> None:
     await _registry.stop_all()
 
 
+def active_sessions() -> list[tuple[str, VideoSession]]:
+    """Las cámaras que se están procesando. Lo usan las métricas."""
+
+    return _registry.snapshot()
+
+
+def session_limit() -> int:
+    return _registry.limit
+
+
 # ----------------------------------------------------------------------
 # WebSocket
 # ----------------------------------------------------------------------

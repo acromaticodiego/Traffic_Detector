@@ -1,0 +1,77 @@
+"""
+Qué se le dice al operario cuando el resumen con IA falla.
+
+La distinción que importa no es técnica sino operativa: un fallo que se
+arregla esperando cinco minutos y uno que necesita que alguien toque la
+configuración no pueden verse igual desde la interfaz. Con un único mensaje
+para los dos, el operario se queda reintentando contra un modelo retirado.
+
+Esto no llegó como hipótesis: `gemini-2.5-flash` fue retirado por Google y
+"Analizar el caso" empezó a fallar con un mensaje que no decía nada.
+"""
+
+from services.vision_service.app.ai.gemini import _explain
+
+MODELO = "gemini-flash-latest"
+
+
+class ErrorDeApi(Exception):
+    """Como los errores del SDK de Google: traen el estado HTTP en `code`."""
+
+    def __init__(self, code: int):
+        super().__init__(f"{code} algo pasó")
+        self.code = code
+
+
+class ReadTimeout(Exception):
+    """El nombre es lo que importa: así lo llama httpx."""
+
+
+class TestMotivo:
+
+    def test_un_modelo_retirado_dice_que_reintentar_no_sirve(self):
+        mensaje = _explain(ErrorDeApi(404), MODELO)
+
+        assert MODELO in mensaje
+        assert "GEMINI_MODEL" in mensaje
+        assert "reintentar" in mensaje.lower()
+
+    def test_una_clave_invalida_se_distingue(self):
+        assert "clave" in _explain(ErrorDeApi(401), MODELO).lower()
+        assert "clave" in _explain(ErrorDeApi(403), MODELO).lower()
+
+    def test_la_cuota_agotada_se_distingue(self):
+        assert "cuota" in _explain(ErrorDeApi(429), MODELO).lower()
+
+    def test_un_fallo_del_servidor_invita_a_reintentar(self):
+        # 503 es lo que devuelve Google cuando el modelo está saturado, que
+        # es temporal y no requiere tocar nada.
+        for code in (500, 502, 503):
+            mensaje = _explain(ErrorDeApi(code), MODELO).lower()
+
+            assert "satur" in mensaje
+            assert "intent" in mensaje
+
+    def test_un_timeout_se_distingue_por_el_nombre(self):
+        assert "tardó" in _explain(ReadTimeout(), MODELO)
+
+    def test_lo_desconocido_cae_en_un_mensaje_generico(self):
+        class RaroInesperado(Exception):
+            pass
+
+        assert "RaroInesperado" in _explain(RaroInesperado(), MODELO)
+
+
+class TestNoFiltrarLaClave:
+
+    def test_el_texto_crudo_del_sdk_nunca_sale(self):
+        # El mensaje de error de un SDK puede traer la URL de la petición, y
+        # en esa URL viaja la clave. Este texto va a la pantalla del operario.
+        secreto = "AIzaSyFALSA_clave_de_prueba"
+        error = ErrorDeApi(404)
+        error.args = (f"404 https://api.google.com/v1?key={secreto}",)
+
+        mensaje = _explain(error, MODELO)
+
+        assert secreto not in mensaje
+        assert "https://" not in mensaje

@@ -1,0 +1,83 @@
+
+name: traffic-detector
+
+services:
+
+  db:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-traffic}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en el .env}
+      POSTGRES_DB: ${POSTGRES_DB:-traffic_detector}
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-traffic} -d ${POSTGRES_DB:-traffic_detector}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+   
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
+  migrate:
+    build:
+      context: .
+      args:
+        TORCH_INDEX: ${TORCH_INDEX:-https://download.pytorch.org/whl/cu128}
+   
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      VISION_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-traffic}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-traffic_detector}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  vision:
+    build:
+      context: .
+      args:
+        TORCH_INDEX: ${TORCH_INDEX:-https://download.pytorch.org/whl/cu128}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      VISION_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-traffic}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-traffic_detector}
+
+      # Sin secreto el servicio arranca pero rechaza todo inicio de sesión.
+      JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+      # Explícito y no "*": en un contenedor que se va a desplegar de verdad,
+      # dejar el comodín significa que cualquier página web puede llamar a
+      # esta API con el token de un operario.
+      VISION_CORS_ORIGINS: ${VISION_CORS_ORIGINS:-http://localhost:5173}
+
+      VISION_MAX_SESSIONS: ${VISION_MAX_SESSIONS:-3}
+      VISION_FRAME_STRIDE: ${VISION_FRAME_STRIDE:-1}
+      VISION_LOOP_SOURCE: ${VISION_LOOP_SOURCE:-0}
+
+      # Habeas Data. La anonimización va encendida; el plazo de retención hay
+      # que fijarlo a conciencia, y 0 significa conservar indefinidamente.
+      VISION_ANONYMIZE: ${VISION_ANONYMIZE:-1}
+      VISION_EVIDENCE_RETENTION_DAYS: ${VISION_EVIDENCE_RETENTION_DAYS:-0}
+
+      VISION_TIMEZONE: ${VISION_TIMEZONE:-America/Bogota}
+    volumes:
+     
+      - ./models:/app/models:ro
+      - ./videos:/app/videos:ro
+     
+      - evidence:/app/outputs
+    ports:
+      - "${VISION_HOST_PORT:-8000}:8000"
+
+volumes:
+  pgdata:
+  evidence:
