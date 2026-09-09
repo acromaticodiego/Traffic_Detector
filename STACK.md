@@ -66,7 +66,10 @@ trabajo use **exactamente las mismas versiones** y no introduzca incompatibilida
 ### Reglas del backend
 
 - **torch + torchvision van juntos** y con el mismo build CUDA. Nunca actualizar uno solo.
-- **ultralytics fijo**: si se sube, revisar `ByteTrackTracker` (usa `model.track(persist=...)`).
+- **ultralytics fijo**: si se sube, revisar `ByteTrackTracker`. No usa la API
+  pública `model.track()`, sino las clases internas `BYTETracker` y
+  `BaseTrack` —única forma de darle a cada cámara un tracker propio— y esas
+  no tienen compromiso de estabilidad entre versiones.
 - El modelo (`models/detectorfinal.pt`) y los videos NO van a git (ver `.gitignore`).
 - Instalación: `pip install -r services/vision_service/requirements.txt`.
 

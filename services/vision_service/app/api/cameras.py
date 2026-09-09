@@ -45,7 +45,12 @@ class Camera:
 
     id: str
     name: str
-    source: Path
+
+    # Un archivo es un Path; una cámara en vivo es la URL tal cual, en str.
+    # El tipo ES la marca —ver `is_stream`— porque `Path("rtsp://host/x")` no
+    # es una ruta rota que se pueda detectar después: en Windows queda como
+    # `rtsp:/host/x`, indistinguible de una ruta relativa cualquiera.
+    source: Path | str
 
     # Calibración de la escena. Son por cámara porque dependen del ángulo y
     # del encuadre: reutilizar las de otra cámara da niveles equivocados.
@@ -68,6 +73,17 @@ class Camera:
     lng: Optional[float] = None
 
     notes: str = ""
+
+    @property
+    def is_stream(self) -> bool:
+        """
+        Si la fuente es una cámara en vivo y no un archivo.
+
+        Cambia casi todo lo que la rodea: no se comprueba en disco, no se
+        acaba, no se rebobina y no se le marca el ritmo.
+        """
+
+        return isinstance(self.source, str)
 
     @property
     def metric(self) -> bool:
@@ -96,6 +112,11 @@ class Camera:
         que ya usa la caché de /api/video.
         """
 
+        if self.is_stream:
+            # Una cámara en vivo no tiene tamaño ni fecha que mirar, pero
+            # tampoco los necesita: la URL ya identifica la pasada.
+            return hashlib.sha1(str(self.source).encode("utf-8")).hexdigest()[:16]
+
         try:
             stat = self.source.stat()
             crudo = f"{self.source.resolve()}:{stat.st_size}:{int(stat.st_mtime)}"
@@ -116,7 +137,10 @@ class Camera:
             "lng": self.lng,
             "calibrated": self.calibrated,
             "metric": self.metric,
-            "available": self.source.exists(),
+            # De una cámara en vivo no se sabe si responde sin abrirla, y
+            # abrir una conexión RTSP por cada listado sería caro y lento: se
+            # da por disponible y la verdad se sabe al conectarse.
+            "available": True if self.is_stream else self.source.exists(),
             "thresholds": {
                 "medium": self.occupancy_medium,
                 "high": self.occupancy_high,
@@ -143,9 +167,31 @@ def _fallback_camera() -> Camera:
     )
 
 
-def _resolve_source(raw: str) -> Path:
-    """Las rutas relativas del YAML se leen desde la raíz del repo, no desde
-    el directorio donde se lanzó el proceso."""
+# Lo que opencv sabe abrir por red. Se listan a propósito en vez de aceptar
+# cualquier cosa con "://": un typo tiene que fallar como fuente inexistente,
+# no convertirse en un stream que nunca conecta.
+_STREAM_SCHEMES = (
+    "rtsp://",
+    "rtsps://",
+    "rtmp://",
+    "http://",
+    "https://",
+    "udp://",
+    "tcp://",
+)
+
+
+def _resolve_source(raw: str) -> Path | str:
+    """
+    La fuente lista para `cv2.VideoCapture`.
+
+    Las rutas relativas del YAML se leen desde la raíz del repo, no desde el
+    directorio donde se lanzó el proceso. Las URL se devuelven intactas: meter
+    una en un `Path` la deja irreconocible.
+    """
+
+    if raw.lower().startswith(_STREAM_SCHEMES):
+        return raw
 
     path = Path(raw)
 

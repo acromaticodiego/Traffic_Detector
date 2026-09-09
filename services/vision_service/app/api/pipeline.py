@@ -5,7 +5,11 @@ Mirrors the manual wiring in
 scripts/test_vision_engine.py but splits the parts
 that can be shared across sessions (the loaded YOLO
 model) from the parts that hold per-run state
-(track manager, engines, analyzers).
+(tracker, track manager, engines, analyzers).
+
+Lo único compartido es el modelo. Todo lo que guarda estado
+—el tracker incluido— se construye por sesión, que es lo que
+permite tener varias cámaras a la vez.
 """
 
 from __future__ import annotations

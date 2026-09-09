@@ -20,6 +20,7 @@ from ...auth.passwords import verify
 from ...auth.tokens import create_access_token
 from ...db.models import UserRow
 from ...db.session import session_scope
+from ...shifts import tracker
 from ..config import settings
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,12 @@ def login(body: LoginRequest) -> dict[str, Any]:
             )
 
             user.last_login_at = datetime.now(timezone.utc)
+
+            # El turno arranca al entrar. Si ya había uno vivo se reanuda en
+            # vez de abrir otro: recargar la página o abrir una segunda
+            # pestaña es la misma jornada, y contarla dos veces duplicaría las
+            # horas de quien trabaja con la consola en dos monitores.
+            tracker.abrir_o_reanudar(session, user.id)
 
             perfil = {
                 "id": user.id,

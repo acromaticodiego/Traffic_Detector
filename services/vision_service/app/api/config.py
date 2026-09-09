@@ -168,6 +168,25 @@ class Settings:
         default_factory=lambda: max(1, _env_int("VISION_FRAME_STRIDE", 1))
     )
 
+    # Cuántas cámaras pueden estar procesándose a la vez. Todas comparten una
+    # sola GPU, así que pasada cierta cantidad no se gana nada: se reparten los
+    # mismos frames por segundo entre más streams y TODAS van peor, sin que
+    # nada lo explique. Es preferible negar la cuarta cámara con un mensaje
+    # claro. Los espectadores no cuentan: diez operarios sobre las mismas tres
+    # cámaras siguen siendo tres sesiones.
+    max_sessions: int = field(
+        default_factory=lambda: max(1, _env_int("VISION_MAX_SESSIONS", 3))
+    )
+
+    # Volver a empezar cuando se acaba el archivo. Existe porque no hay
+    # acceso a las cámaras reales y todo se prueba sobre grabaciones: un clip
+    # en bucle es lo más parecido a un stream continuo que se puede tener sin
+    # RTSP, y sin esto una demo se queda congelada al minuto. No afecta a las
+    # fuentes en vivo, que no se rebobinan.
+    loop_source: bool = field(
+        default_factory=lambda: _env_bool("VISION_LOOP_SOURCE", False)
+    )
+
     cors_origins: list[str] = field(default_factory=_cors_origins)
 
     # ------------------------------------------------------------------
@@ -187,6 +206,30 @@ class Settings:
     # completo sin obligar a reingresar a media jornada.
     jwt_expire_minutes: int = field(
         default_factory=lambda: _env_int("JWT_EXPIRE_MINUTES", 720)
+    )
+
+    # ------------------------------------------------------------------
+    # Turnos de trabajo
+    # ------------------------------------------------------------------
+    # Cuánto silencio se perdona antes de dejar de contar el tiempo como
+    # trabajado. Cubre el corte de internet, el cambio de red y la pestaña que
+    # el navegador congela: a nadie se le descuenta el tiempo por su conexión.
+    shift_grace_minutes: int = field(
+        default_factory=lambda: _env_int("SHIFT_GRACE_MINUTES", 10)
+    )
+
+    # A partir de aquí se entiende que el turno terminó y el siguiente latido
+    # abre uno nuevo. Sin este tope, una pestaña olvidada abierta el viernes
+    # acumularía horas todo el fin de semana.
+    shift_timeout_minutes: int = field(
+        default_factory=lambda: _env_int("SHIFT_TIMEOUT_MINUTES", 60)
+    )
+
+    # Huso horario del despliegue. Decide dónde corta "hoy" en el dashboard:
+    # con UTC, en Colombia el día empezaría a las siete de la tarde anterior y
+    # las horas de un turno aparecerían repartidas entre dos días.
+    timezone: str = field(
+        default_factory=lambda: _env_str("VISION_TIMEZONE", "America/Bogota")
     )
 
     # ------------------------------------------------------------------
@@ -291,6 +334,8 @@ class Settings:
             "iou": self.iou,
             "image_size": self.image_size,
             "frame_stride": self.frame_stride,
+            "max_sessions": self.max_sessions,
+            "loop_source": self.loop_source,
             "cors_origins": self.cors_origins,
             "evidence_enabled": self.evidence_enabled,
             "evidence_dir": str(self.evidence_dir),
@@ -298,6 +343,9 @@ class Settings:
             # devuelve por /health.
             # Solo si hay secreto o no. El valor jamás se registra.
             "auth_configured": bool(self.jwt_secret),
+            "timezone": self.timezone,
+            "shift_grace_minutes": self.shift_grace_minutes,
+            "shift_timeout_minutes": self.shift_timeout_minutes,
             "jwt_expire_minutes": self.jwt_expire_minutes,
             "gemini_configured": bool(self.gemini_api_key),
             "gemini_model": self.gemini_model,

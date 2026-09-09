@@ -13,9 +13,12 @@ Protocol (server -> client):
 The camera is chosen with ?camera=<id> (see cameras.yaml); omitting it
 takes the first one in the registry.
 
-Still only one session at a time, whatever the camera: ByteTrack keeps its
-state on the shared YOLO model, so two concurrent sessions would corrupt each
-other's tracks. Switching camera therefore restarts the pipeline.
+Varias cámaras pueden correr a la vez —cada sesión tiene su propio tracker—
+pero cada una se procesa UNA sola vez: los operarios que abran la misma cámara
+comparten sesión y reciben el mismo stream. Procesar dos veces el mismo video
+gastaría el doble de GPU para producir exactamente lo mismo.
+
+El tope de sesiones (`VISION_MAX_SESSIONS`) cuenta cámaras, no espectadores.
 """
 
 from __future__ import annotations
@@ -29,15 +32,16 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from ...auth.dependencies import CurrentUser, load_user
 from ...db.models import PERM_STREAM_VIEW
 from ...db.session import session_scope
-from ..cameras import get_camera
+from ..cameras import Camera, get_camera
+from ..config import settings
+from ..registry import Rejected, SessionRegistry
 from ..session import VideoSession
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["inference"])
 
-_active: VideoSession | None = None
-_lock = asyncio.Lock()
+_registry = SessionRegistry(settings.max_sessions)
 
 
 def _authenticate(websocket: WebSocket) -> Optional[CurrentUser]:
@@ -77,10 +81,42 @@ def _parse_stride(websocket: WebSocket) -> int | None:
         return None
 
 
+def _open_session(
+    detector,
+    loop: asyncio.AbstractEventLoop,
+    camera: Camera,
+    stride: int | None,
+):
+    """La corrutina que el registro usa para levantar esta cámara."""
+
+    async def factory() -> VideoSession:
+        session = VideoSession(detector, loop, camera, stride)
+
+        # Abrir el video toca disco (o la red, con RTSP). En un hilo aparte
+        # para no dejar clavado el bucle, que ahora atiende varias cámaras.
+        try:
+            await asyncio.to_thread(session.open)
+        except Exception as error:  # noqa: BLE001
+            raise Rejected(str(error), "unavailable") from error
+
+        return session
+
+    return factory
+
+
+async def stop_all() -> None:
+    """Apagar todas las cámaras. La llama el apagado del servicio."""
+
+    await _registry.stop_all()
+
+
+# ----------------------------------------------------------------------
+# WebSocket
+# ----------------------------------------------------------------------
+
+
 @router.websocket("/ws/inference")
 async def inference_ws(websocket: WebSocket) -> None:
-    global _active
-
     await websocket.accept()
 
     # --------------------------------------------------------------
@@ -121,29 +157,29 @@ async def inference_ws(websocket: WebSocket) -> None:
         await websocket.close()
         return
 
-    async with _lock:
-        if _active is not None:
-            await asyncio.to_thread(_active.stop)
-            _active = None
+    try:
+        session, subscriber = await _registry.acquire(
+            camera.id,
+            _open_session(detector, loop, camera, stride),
+        )
 
-        session = VideoSession(detector, loop, camera, stride)
+    except Rejected as rejection:
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": rejection.message,
+                "code": rejection.code,
+            }
+        )
+        await websocket.close()
+        return
 
-        try:
-            meta = session.open()
-        except Exception as error:  # noqa: BLE001
-            await websocket.send_json(
-                {"type": "error", "message": str(error)}
-            )
-            await websocket.close()
-            return
-
-        _active = session
-
-    await websocket.send_json(meta)
-    session.start()
+    # El `meta` puede ser de una sesión que lleva rato corriendo: quien entra
+    # tarde se engancha en vivo, no desde el principio del video.
+    await websocket.send_json(session.meta)
 
     try:
-        async for message in session.messages():
+        async for message in subscriber.messages():
             await websocket.send_json(message)
 
     except WebSocketDisconnect:
@@ -154,11 +190,7 @@ async def inference_ws(websocket: WebSocket) -> None:
         pass
 
     finally:
-        await asyncio.to_thread(session.stop)
-
-        async with _lock:
-            if _active is session:
-                _active = None
+        await _registry.release(camera.id, session, subscriber)
 
         try:
             await websocket.close()

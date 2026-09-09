@@ -142,7 +142,6 @@ def main() -> None:
             frame=frame,
             frame_id=index + 1,
             timestamp=datetime.now(),
-            persist_tracks=index > 0,
         )
 
         traffic = estimator.update(result.tracks, motion=result.motion)

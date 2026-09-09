@@ -4,23 +4,28 @@ burned-in video and streams per-frame results.
 
 The OpenCV + YOLO loop is blocking, so it runs in a
 worker thread and hands messages back to the asyncio
-side through a bounded queue. The bounded queue also
-provides natural backpressure: if the browser cannot
-keep up, the worker thread blocks instead of piling
-frames in memory.
+side through per-client queues.
 
-Only ONE session is meant to be active at a time
-(ByteTrack keeps state on the shared YOLO model).
-The WebSocket route enforces that.
+Cada sesión lleva su propio tracker, así que varias pueden
+correr a la vez sin mezclarse los IDs. El límite de cuántas
+caben lo pone la ruta del WebSocket, no esta clase.
+
+Una cámara se procesa UNA vez y su resultado se reparte a
+todos los operarios que la estén mirando. Antes había un solo
+cliente y su cola marcaba el ritmo: si el navegador se
+atrasaba, el hilo de visión se bloqueaba. Con varios eso deja
+de valer —el más lento le impondría su ritmo a todos— así que
+ahora cada uno tiene su cola, al que se atrasa se le tiran
+frames, y el ritmo lo marca el reloj (ver `_pace`).
 """
 
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import logging
 import math
 import threading
+import time
 from datetime import datetime
 from typing import Any, Optional
 
@@ -35,11 +40,12 @@ from .pipeline import build_vision_engine
 from .protocol import PROTOCOL_VERSION
 from ..db.incident_writer import incident_writer
 from .serializers import event_to_dict, incident_to_dict, track_to_dict
+from .playback import Playback
+from .subscribers import Subscriber
 from .traffic_level import TrafficLevelEstimator
 
 logger = logging.getLogger(__name__)
 
-_QUEUE_MAXSIZE = 120
 _DEFAULT_FPS = 25.0
 
 
@@ -62,6 +68,9 @@ class VideoSession:
         # hasta abrir la fuente.
         self._engine = None
 
+        # Igual que el motor: depende de los fps, que no se saben hasta abrir.
+        self._playback: Optional[Playback] = None
+
         # Every scene knob comes from the camera, not from the global config:
         # two cameras in the same deployment have different geometry, so
         # sharing one ROI or one threshold gives one of them a wrong level.
@@ -72,18 +81,31 @@ class VideoSession:
             free_speed=camera.free_speed,
             stride=self._stride,
         )
-        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(
-            maxsize=_QUEUE_MAXSIZE
-        )
+        self._subscribers: set[Subscriber] = set()
+        self._subs_lock = threading.Lock()
+
+        # El `meta` se guarda porque un operario puede entrar a una cámara que
+        # ya lleva rato procesándose: hay que poder dárselo sin reabrir nada.
+        self.meta: dict[str, Any] = {}
 
         self._cap: Optional[cv2.VideoCapture] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
         self.fps: float = _DEFAULT_FPS
-        self.frame_count: int = 0
+
+        # None cuando la fuente no tiene final que contar.
+        self.frame_count: Optional[int] = None
         self.width: int = 0
         self.height: int = 0
+
+        # Los lleva el hilo de visión y los lee quien quiera saber cómo va la
+        # cámara: el mensaje `done` y, más adelante, las métricas.
+        self.frames_read: int = 0
+        self.frames_processed: int = 0
+
+        # Cuántas veces se ha rebobinado el archivo.
+        self.laps: int = 0
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -97,7 +119,9 @@ class VideoSession:
 
         source = self._camera.source
 
-        if not source.exists():
+        # A una URL no se le pregunta por el disco: si la cámara no responde,
+        # se sabrá al abrirla, unas líneas más abajo.
+        if not self._camera.is_stream and not source.exists():
             raise FileNotFoundError(
                 f"Fuente no encontrada para '{self._camera.id}': {source}"
             )
@@ -116,7 +140,14 @@ class VideoSession:
 
         self._cap = cap
         self.fps = float(fps)
-        self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        self._playback = Playback(
+            is_stream=self._camera.is_stream,
+            loop_enabled=settings.loop_source,
+            fps=self.fps,
+        )
+
+        self.frame_count = self._playback.frame_count(self._reported_frames(cap))
         self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
@@ -132,13 +163,15 @@ class VideoSession:
             fps=self.fps / self._stride,
         )
 
-        return {
+        self.meta = {
             "type": "meta",
             # Lets the frontend notice it is talking to a service older than
             # itself, instead of crashing on a field that is not there.
             "protocol": PROTOCOL_VERSION,
             "camera": self._camera.public(),
             "fps": self.fps,
+            # null en una fuente en vivo: no tiene final que contar. El
+            # frontend lo distingue de un 0, que significaría video vacío.
             "frame_count": self.frame_count,
             "width": self.width,
             "height": self.height,
@@ -151,6 +184,22 @@ class VideoSession:
             # draw it over the video while calibrating. null = whole frame.
             "road_roi": self._traffic.roi.polygon,
         }
+
+        return self.meta
+
+    @staticmethod
+    def _reported_frames(cap: cv2.VideoCapture) -> int:
+        """Lo que opencv dice que dura la fuente, saneado.
+
+        Con un stream responde cualquier cosa —cero, un negativo, un NaN— y
+        `int(nan)` revienta."""
+
+        reported = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+
+        if not reported or math.isnan(reported):
+            return 0
+
+        return int(reported)
 
     def _ground_plane(self) -> Optional[GroundPlane]:
         """
@@ -218,19 +267,28 @@ class VideoSession:
             self._camera.id,
         )
 
-    async def messages(self):
-        """
-        Async generator yielding stream messages until
-        `done` (or the session is stopped).
-        """
+    # ------------------------------------------------------------------
+    # suscriptores
+    # ------------------------------------------------------------------
 
-        while True:
-            msg = await self._queue.get()
+    def add_subscriber(self) -> Subscriber:
+        """Enganchar un cliente más a esta cámara."""
 
-            yield msg
+        subscriber = Subscriber(self._loop)
 
-            if msg.get("type") in ("done", "error"):
-                break
+        with self._subs_lock:
+            self._subscribers.add(subscriber)
+
+        return subscriber
+
+    def remove_subscriber(self, subscriber: Subscriber) -> None:
+        with self._subs_lock:
+            self._subscribers.discard(subscriber)
+
+    @property
+    def subscribers(self) -> int:
+        with self._subs_lock:
+            return len(self._subscribers)
 
     def stop(self) -> None:
         self._stop.set()
@@ -245,42 +303,109 @@ class VideoSession:
         if self._engine is not None:
             self._engine.reset()
 
+        # Sin esto, un cliente que estuviera esperando mensajes se queda
+        # colgado en el evento hasta que se caiga la conexión por su cuenta.
+        self._broadcast(self._done_message())
+
+    def _done_message(self) -> dict[str, Any]:
+        return {
+            "type": "done",
+            "frames": self.frames_read,
+            "processed": self.frames_processed,
+        }
+
     # ------------------------------------------------------------------
     # worker thread
     # ------------------------------------------------------------------
 
-    def _put(self, message: dict[str, Any]) -> None:
+    def _broadcast(self, message: dict[str, Any]) -> None:
         """
-        Block the worker thread until the asyncio queue
-        has room (backpressure), but keep checking the
-        stop flag so a dropped client cannot wedge the
-        thread forever on a full queue.
+        Repartir el mensaje a todos los clientes conectados.
+
+        No bloquea nunca. Antes sí lo hacía —esa era la contrapresión que
+        impedía acumular frames en memoria— pero con varios espectadores
+        bloquear significaría que el más lento le marca el ritmo a la cámara,
+        y una cámara no puede dejar de mirar la calle porque alguien tenga mal
+        wifi. El acumular se acota ahora en la cola de cada uno.
         """
 
-        future = asyncio.run_coroutine_threadsafe(
-            self._queue.put(message),
-            self._loop,
+        with self._subs_lock:
+            targets = list(self._subscribers)
+
+        for subscriber in targets:
+            subscriber.push(message)
+
+    def _pace(self, frame_id: int, started: float) -> None:
+        """
+        Esperar a que el reloj alcance al video.
+
+        Hasta ahora el ritmo lo marcaba, de rebote, la cola del navegador: el
+        hilo se bloqueaba al llenarse. Sin eso, un archivo se procesaría tan
+        rápido como dé la GPU y el operario vería la calle en cámara rápida.
+
+        Una fuente en vivo se marca su propio ritmo, porque `cap.read()` ya
+        espera al siguiente frame; ahí esta cuenta no llega a esperar nunca.
+        Y si la GPU no da abasto tampoco espera: se queda atrás, que es lo
+        honesto, en vez de fingir que va al día.
+        """
+
+        if self.fps <= 0 or self._playback is None:
+            return
+
+        if not self._playback.paced:
+            return
+
+        ahead = (started + frame_id / self.fps) - time.monotonic()
+
+        if ahead > 0:
+            # `wait` y no `sleep` para que parar la sesión sea inmediato.
+            self._stop.wait(timeout=ahead)
+
+    def _rewind(self, cap: cv2.VideoCapture) -> bool:
+        """
+        Volver al principio del archivo. False si no toca o no se pudo.
+
+        La comprobación con `grab` no sobra: un archivo truncado acepta el
+        salto y sigue sin devolver frames, y eso sería un bucle vacío girando
+        a toda velocidad sin que nadie lo note.
+        """
+
+        if self._playback is None or not self._playback.loops:
+            return False
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        if not cap.grab():
+            logger.warning(
+                "No se pudo rebobinar la fuente de '%s'; se cierra la sesión.",
+                self._camera.id,
+            )
+            return False
+
+        # `grab` ya consumió el primer frame: hay que dejarlo otra vez ahí.
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        self.laps += 1
+
+        logger.info(
+            "La fuente de '%s' volvió a empezar (vuelta %d).",
+            self._camera.id,
+            self.laps,
         )
 
-        while not self._stop.is_set():
-            try:
-                future.result(timeout=0.5)
-                return
-            except concurrent.futures.TimeoutError:
-                continue
-            except Exception:
-                self._stop.set()
-                return
-
-        future.cancel()
+        return True
 
     def _process_video(self) -> None:
         cap = self._cap
         assert cap is not None
 
+        # `frame_id` no se reinicia nunca: identifica el frame dentro de la
+        # sesión, y el escritor de incidentes lo usa para no confundir dos
+        # pasadas. `pass_frame` sí, porque es la posición dentro del video.
         frame_id = 0
+        pass_frame = 0
         processed = 0
-        first = True
+        started = time.monotonic()
 
         try:
             while not self._stop.is_set():
@@ -288,9 +413,19 @@ class VideoSession:
                 ok, frame = cap.read()
 
                 if not ok:
-                    break
+                    if not self._rewind(cap):
+                        break
+
+                    pass_frame = 0
+                    continue
 
                 frame_id += 1
+                pass_frame += 1
+                self.frames_read = frame_id
+
+                # El ritmo se marca sobre los frames leídos, no sobre los
+                # procesados: con stride > 1 el video sigue durando lo mismo.
+                self._pace(frame_id, started)
 
                 # honour the stride (process frame 1, 1+stride, ...)
                 if (frame_id - 1) % self._stride != 0:
@@ -300,12 +435,14 @@ class VideoSession:
                     frame=frame,
                     frame_id=frame_id,
                     timestamp=datetime.now(),
-                    persist_tracks=not first,
                 )
-                first = False
                 processed += 1
+                self.frames_processed = processed
 
-                t = frame_id / self.fps
+                t = self._playback.timestamp(
+                    pass_frame,
+                    time.monotonic() - started,
+                )
 
                 motion_by_id = {
                     m.track_id: m for m in result.motion
@@ -329,7 +466,7 @@ class VideoSession:
                     motion=result.motion,
                 )
 
-                self._put(
+                self._broadcast(
                     {
                         "type": "frame",
                         "frame_id": frame_id,
@@ -352,7 +489,7 @@ class VideoSession:
 
                 # emit incidents also as standalone messages
                 for inc in incidents_payload:
-                    self._put({"type": "incident", **inc})
+                    self._broadcast({"type": "incident", **inc})
                     # Queued, never written inline: the vision loop must not
                     # wait on Postgres. Repeats of the same incident across
                     # frames are dropped by the writer.
@@ -361,13 +498,9 @@ class VideoSession:
                     )
 
         except Exception as error:  # noqa: BLE001
-            self._put({"type": "error", "message": str(error)})
+            self._broadcast({"type": "error", "message": str(error)})
             return
 
-        self._put(
-            {
-                "type": "done",
-                "frames": frame_id,
-                "processed": processed,
-            }
-        )
+        # Que un archivo se acabe es el final esperado; que una cámara en vivo
+        # deje de mandar es una avería. No es el mismo mensaje.
+        self._broadcast(self._playback.end_message(frame_id, processed))

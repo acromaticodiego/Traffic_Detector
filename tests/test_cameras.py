@@ -50,6 +50,37 @@ class TestParseoDeUnaEntrada:
         assert camera.source.is_absolute()
         assert camera.source == registry.REPO_ROOT / "videos/input/demo.mp4"
 
+    def test_una_url_rtsp_no_se_convierte_en_una_ruta(self):
+        # Meter "rtsp://host/stream" en un Path lo deja como "rtsp:/host/stream"
+        # y, al no ser absoluta, acabaría colgando de la raíz del repo: una
+        # ruta inexistente indistinguible de un typo.
+        camera = parse(id="c1", source="rtsp://10.0.0.5:554/stream")
+
+        assert camera.is_stream is True
+        assert camera.source == "rtsp://10.0.0.5:554/stream"
+
+    def test_un_archivo_no_es_un_stream(self):
+        assert parse(id="c1", source="videos/input/demo.mp4").is_stream is False
+
+    def test_de_una_camara_en_vivo_no_se_afirma_que_falta(self):
+        # No se sabe si responde sin abrirla, y abrir una conexión RTSP por
+        # cada listado sería caro: se da por disponible hasta conectarse.
+        camera = parse(id="c1", source="rtsp://10.0.0.5:554/stream")
+
+        assert camera.public()["available"] is True
+
+    def test_una_camara_en_vivo_tiene_huella_estable(self):
+        # El escritor de incidentes la usa para agrupar la pasada; sin
+        # archivo que medir, la URL tiene que bastar.
+        primera = parse(id="c1", source="rtsp://10.0.0.5:554/stream").source_key
+        segunda = parse(id="c1", source="rtsp://10.0.0.5:554/stream").source_key
+
+        assert primera == segunda
+        assert (
+            primera
+            != parse(id="c1", source="rtsp://10.0.0.6:554/stream").source_key
+        )
+
     def test_una_camara_sin_id_o_sin_source_es_un_error_de_configuracion(self):
         with pytest.raises(ValueError):
             parse(name="Sin id", source="videos/input/demo.mp4")
