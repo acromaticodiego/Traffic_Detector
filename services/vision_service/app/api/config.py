@@ -246,14 +246,26 @@ class Settings:
     # Configurable a propósito: los identificadores de modelo de Google
     # cambian, y quedarse fijado a uno retirado convierte un cambio de
     # proveedor en un cambio de código.
+    #
+    # Por defecto va un ALIAS y no una versión concreta. No es descuido: el
+    # `gemini-2.5-flash` que estaba aquí antes fue retirado y la función se
+    # cayó con un 404 en producción. Un alias se mueve solo cuando Google
+    # jubila el modelo de debajo. A cambio, el modelo puede cambiar sin aviso
+    # y con él el tono del resumen: para reproducibilidad, fijar una versión
+    # concreta aquí y aceptar tener que actualizarla.
     gemini_model: str = field(
-        default_factory=lambda: _env_str("GEMINI_MODEL", "gemini-2.5-flash")
+        default_factory=lambda: _env_str("GEMINI_MODEL", "gemini-flash-latest")
     )
 
     # Segundos antes de rendirse. Una petición colgada no puede dejar
     # esperando al agente que abrió el incidente.
+    #
+    # 30 se quedaban cortos: los modelos actuales razonan antes de responder y
+    # el SDK reintenta por su cuenta, así que una llamada legítima puede pasar
+    # del medio minuto. Con el valor viejo el agente recibía un timeout en vez
+    # del motivo real del fallo.
     gemini_timeout: float = field(
-        default_factory=lambda: _env_float("GEMINI_TIMEOUT", 30.0)
+        default_factory=lambda: _env_float("GEMINI_TIMEOUT", 60.0)
     )
 
     # Evidencia de los incidentes: por cada uno se guarda el frame original y

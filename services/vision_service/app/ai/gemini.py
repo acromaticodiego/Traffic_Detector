@@ -38,6 +38,55 @@ class SummaryUnavailable(RuntimeError):
     """No se puede generar el resumen ahora (falta clave, falla la red…)."""
 
 
+def _explain(error: Exception, model: str) -> str:
+    """
+    Por qué falló, en términos que le digan al operario qué hacer.
+
+    La distinción que importa no es técnica sino operativa: hay fallos que se
+    arreglan reintentando en cinco minutos y otros que necesitan que alguien
+    toque la configuración. Un único mensaje para los dos deja al operario
+    reintentando contra un modelo que ya no existe.
+
+    Nunca se incluye el texto crudo del SDK: puede traer la URL de la
+    petición, y en esa URL viaja la clave. Lo crudo va al log del servidor.
+
+    Se lee `code` con getattr en vez de capturar las clases de error del SDK
+    para no obligar a tenerlo instalado, que es lo que permite probar esto en
+    el CI.
+    """
+
+    code = getattr(error, "code", None)
+    name = type(error).__name__
+
+    if code == 404:
+        return (
+            f"El modelo de IA configurado ('{model}') ya no está disponible. "
+            f"Hay que actualizar GEMINI_MODEL; reintentar no lo va a arreglar."
+        )
+
+    if code in (401, 403):
+        return "La clave de la API de IA no es válida o no tiene permiso."
+
+    if code == 429:
+        return (
+            "Se agotó la cuota de la API de IA. Vuelve a intentarlo más tarde."
+        )
+
+    if isinstance(code, int) and code >= 500:
+        return (
+            "El servicio de IA está saturado en este momento. Vuelve a "
+            "intentarlo en unos minutos."
+        )
+
+    if "timeout" in name.lower():
+        return (
+            "El servicio de IA tardó demasiado en responder. Vuelve a "
+            "intentarlo."
+        )
+
+    return f"El servicio de IA no respondió ({name})."
+
+
 # ----------------------------------------------------------------------
 # Prompt
 # ----------------------------------------------------------------------
@@ -184,7 +233,7 @@ def generate(incident: dict[str, Any], image: Optional[Path] = None) -> str:
         # Al log va completo; hacia arriba va algo que se puede mostrar.
         logger.warning("Gemini falló: %s", error, exc_info=True)
         raise SummaryUnavailable(
-            f"El servicio de IA no respondió ({type(error).__name__})."
+            _explain(error, settings.gemini_model)
         ) from error
 
     if not texto:
