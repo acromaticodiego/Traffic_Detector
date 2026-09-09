@@ -101,6 +101,11 @@ class ByteTrackTracker:
         self._config = _load_tracker_config(tracker)
         self._tracker = _new_bytetrack(self._config)
 
+        # Todo lo que vio YOLO en el último frame, con track o sin él. Lo usa
+        # la anonimización de la evidencia: un vehículo recién entrado al
+        # frame todavía no tiene track, pero su placa se lee igual.
+        self.last_detections: list[Detection] = []
+
         print(
             "ByteTrack configured."
         )
@@ -144,7 +149,10 @@ class ByteTrackTracker:
         boxes = self._detect(frame)
 
         if boxes is None:
+            self.last_detections = []
             return []
+
+        self.last_detections = self._raw_detections(boxes)
 
         # Se llama en TODOS los frames, también en los que no traen ninguna
         # detección: el tracker cuenta frames para envejecer los tracks
@@ -183,6 +191,33 @@ class ByteTrackTracker:
 
             detections.append(
                 detection
+            )
+
+        return detections
+
+    def _raw_detections(self, boxes) -> list[Detection]:
+        """Las cajas del detector antes de asociarlas, sin track_id."""
+
+        detections: list[Detection] = []
+
+        for corners, confidence, class_id in zip(
+            boxes.xyxy, boxes.conf, boxes.cls
+        ):
+            x1, y1, x2, y2 = corners
+            class_id = int(class_id)
+
+            detections.append(
+                Detection(
+                    class_id=class_id,
+                    class_name=self.model.names[class_id],
+                    confidence=float(confidence),
+                    bbox=BoundingBox(
+                        x1=float(x1),
+                        y1=float(y1),
+                        x2=float(x2),
+                        y2=float(y2),
+                    ),
+                )
             )
 
         return detections

@@ -274,6 +274,31 @@ class Settings:
         )
     )
 
+    # ------------------------------------------------------------------
+    # Anonimización de la evidencia (Ley 1581 de 2012, Habeas Data)
+    # ------------------------------------------------------------------
+    # Placas y rostros se tapan ANTES de escribir la imagen, así que el
+    # original identificable no llega a existir en disco. Va encendido por
+    # defecto porque el descuido aquí no se nota hasta que lo encuentra un
+    # abogado: apagarlo es una decisión que alguien tiene que tomar a
+    # conciencia, no algo que pase por olvido.
+    anonymize_evidence: bool = field(
+        default_factory=lambda: _env_bool("VISION_ANONYMIZE", True)
+    )
+
+    # Qué fracción de cada caja se tapa: abajo la placa, arriba la cabeza. Se
+    # pueden ajustar porque dependen del ángulo de la cámara —una toma más
+    # cenital ve la placa más arriba dentro del recuadro—, pero conviene
+    # moverlas hacia arriba, no hacia abajo: quedarse corto deja una placa
+    # legible guardada para siempre.
+    anonymize_plate_band: float = field(
+        default_factory=lambda: _env_float("VISION_ANONYMIZE_PLATE_BAND", 0.35)
+    )
+
+    anonymize_face_band: float = field(
+        default_factory=lambda: _env_float("VISION_ANONYMIZE_FACE_BAND", 0.30)
+    )
+
     # Postgres. The +psycopg suffix picks the psycopg 3 driver explicitly;
     # without it SQLAlchemy still looks for psycopg2, which is not installed.
     database_url: str = field(
@@ -339,6 +364,7 @@ class Settings:
             "cors_origins": self.cors_origins,
             "evidence_enabled": self.evidence_enabled,
             "evidence_dir": str(self.evidence_dir),
+            "anonymize_evidence": self.anonymize_evidence,
             # Solo si hay clave o no. El valor jamás se registra ni se
             # devuelve por /health.
             # Solo si hay secreto o no. El valor jamás se registra.

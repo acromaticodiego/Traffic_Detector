@@ -3,8 +3,23 @@ from pathlib import Path
 
 import cv2
 
+from ..detection.schemas import Detection
 from ..tracking.track_state import TrackState
+from .anonymize import (
+    FACE_BAND,
+    PLATE_BAND,
+    Region,
+    boxes_from_detections,
+    boxes_from_tracks,
+    regions_for,
+)
 from .schemas import IncidentCandidate
+
+# Cuántos píxeles del original colapsan en cada bloque del mosaico, y cuántos
+# bloques como mucho a lo ancho. El tope importa: sin él, una franja grande
+# —un bus de cerca— saldría con bloques finos y una placa podría sobrevivir.
+_PIXEL_BLOCK = 6
+_MAX_BLOCKS = 12
 
 # Lo que no sea esto se reemplaza por "_": el id del incidente y el de la
 # cámara terminan siendo nombres de carpeta, y ambos los escribe una persona.
@@ -32,12 +47,23 @@ class IncidentEvidence:
         self,
         output_dir: Path,
         scope: str = "",
+        anonymize: bool = True,
+        plate_band: float = PLATE_BAND,
+        face_band: float = FACE_BAND,
     ):
         """
         `scope` separa la evidencia por cámara. Sin él, dos cámaras que
         procesan el mismo número de frame escriben en la misma carpeta y la
         segunda pisa a la primera.
+
+        `anonymize` tapa placas y rostros ANTES de escribir (Ley 1581). Se
+        puede apagar para calibrar, pero apagarlo en operación real deja datos
+        personales en disco sin base legal para conservarlos.
         """
+
+        self.anonymize = anonymize
+        self.plate_band = plate_band
+        self.face_band = face_band
 
         self.output_dir = Path(output_dir)
 
@@ -62,7 +88,14 @@ class IncidentEvidence:
         incident: IncidentCandidate,
         tracks: list[TrackState],
         frame_id: int,
+        detections: list[Detection] | None = None,
     ) -> Path:
+        """
+        `detections` es TODO lo que vio el detector en el frame, tenga track o
+        no. Se usa para anonimizar: la evidencia es la imagen entera, así que
+        ahí salen las placas de los que pasaban al lado, y un vehículo que
+        acaba de entrar al frame aún no tiene track pero su placa se lee igual.
+        """
 
         # ==================================================
         # INCIDENT DIRECTORY
@@ -103,6 +136,12 @@ class IncidentEvidence:
         # ==================================================
         # SAVE ORIGINAL FRAME
         # ==================================================
+
+        # Se anonimiza UNA vez y las dos imágenes salen de ahí. El original
+        # sin tapar no llega a tocar el disco en ningún momento: si se
+        # escribiera primero y se limpiara después, bastaría con que el
+        # proceso muriera en medio para dejarlo ahí para siempre.
+        frame = self._anonymized(frame, tracks, detections)
 
         original_path = (
             incident_dir
@@ -272,3 +311,82 @@ class IncidentEvidence:
         self._saved[key] = annotated_path
 
         return annotated_path
+
+    # ==================================================
+    # ANONIMIZACIÓN
+    # ==================================================
+
+    def _anonymized(
+        self,
+        frame,
+        tracks: list[TrackState],
+        detections: list[Detection] | None,
+    ):
+        """
+        Una copia del frame con placas y rostros tapados.
+
+        Se unen las detecciones y los tracks a propósito, aunque casi siempre
+        se solapen: un track puede seguir vivo durante una oclusión sin que
+        haya detección ese frame, y ahí sigue habiendo un vehículo que tapar.
+        Tapar dos veces la misma franja no cuesta nada; dejarla sin tapar sí.
+        """
+
+        if not self.anonymize:
+            return frame
+
+        height, width = frame.shape[:2]
+
+        boxes = boxes_from_tracks(tracks)
+
+        if detections:
+            boxes = boxes_from_detections(detections) + boxes
+
+        regions = regions_for(
+            boxes,
+            width,
+            height,
+            plate_band=self.plate_band,
+            face_band=self.face_band,
+        )
+
+        if not regions:
+            return frame
+
+        safe = frame.copy()
+
+        for region in regions:
+            _pixelate(safe, region)
+
+        return safe
+
+
+def _pixelate(image, region: Region) -> None:
+    """
+    Mosaico grueso sobre una región, in situ.
+
+    Mosaico y no desenfoque: un gaussiano suave conserva bastante señal como
+    para que se pueda intentar revertir. Al reducir y volver a ampliar, la
+    información simplemente ya no está en el archivo.
+    """
+
+    piece = image[region.y1:region.y2, region.x1:region.x2]
+
+    if piece.size == 0:
+        return
+
+    height, width = piece.shape[:2]
+
+    small = cv2.resize(
+        piece,
+        (
+            max(1, min(width // _PIXEL_BLOCK, _MAX_BLOCKS)),
+            max(1, min(height // _PIXEL_BLOCK, _MAX_BLOCKS)),
+        ),
+        interpolation=cv2.INTER_AREA,
+    )
+
+    image[region.y1:region.y2, region.x1:region.x2] = cv2.resize(
+        small,
+        (width, height),
+        interpolation=cv2.INTER_NEAREST,
+    )

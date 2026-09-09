@@ -159,14 +159,13 @@ class VisionEngine:
         # ======================================
 
         """
-        The tracker already gives us the YOLO
-        detections together with their track IDs.
-
-        Therefore we reuse them instead of running
-        the detector again.
+        `tracked_detections` son las que consiguieron track. `detections` es
+        TODO lo que vio YOLO, con track o sin él: la evidencia se anonimiza
+        contra esta lista, y un vehículo que acaba de entrar al frame todavía
+        no tiene track pero su placa se lee igual.
         """
 
-        detections = tracked_detections
+        detections = self.tracker.last_detections
 
         # ======================================
         # 3. TRACK STATE
@@ -222,6 +221,7 @@ class VisionEngine:
                         incident=incident,
                         tracks=tracks,
                         frame_id=frame_id,
+                        detections=detections,
                     )
                 )
 
