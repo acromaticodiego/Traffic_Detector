@@ -191,14 +191,13 @@ def seguir(engine, track_a, track_b, speed, frames):
 
 
 def colisiones(incidents):
-    """Solo los `possible_collision`.
-
-    Tras un choque que inmoviliza, el motor emite además un
-    `vehiculo_detenido` por cada implicado —lo cual es correcto: quedaron
-    parados— pero aquí lo que se está probando es el veredicto del choque.
-    """
+    """Solo los `possible_collision`, para aislar el veredicto del choque."""
 
     return [i for i in incidents if i.incident_type == "possible_collision"]
+
+
+def detenidos(incidents):
+    return [i for i in incidents if i.incident_type == "vehiculo_detenido"]
 
 
 class TestDesenlace:
@@ -566,3 +565,89 @@ class TestOlvido:
 
         assert len(engine._speed_peak) <= techo
         assert len(engine._last_seen) <= techo
+
+
+class TestUnChoqueEsUnIncidente:
+    """
+    Un choque que inmoviliza salía como TRES incidentes: la colisión y un
+    `vehiculo_detenido` por cada implicado. Es correcto por dentro —los dos
+    quedaron parados— pero es un solo hecho, y un ingeniero de tránsito que
+    abre la bandeja y ve tres entradas concluye que el sistema no sabe contar.
+
+    La parada de un implicado no es un incidente aparte: ES el desenlace del
+    choque, y de hecho es lo que el motor ya usaba para confirmarlo.
+    """
+
+    def choque_que_inmoviliza(self, engine, a, b, frames=40):
+        incidents = acercar(engine, a, b, IMPACTO)
+        incidents.extend(seguir(engine, a, b, STOPPED, frames=frames))
+
+        return incidents
+
+    def test_sale_un_solo_incidente_y_no_tres(self):
+        engine = IncidentEngine()
+
+        a = make_track(1, box=(100, 100, 140, 140))
+        b = make_track(2, box=(200, 100, 240, 140))
+
+        incidents = self.choque_que_inmoviliza(engine, a, b)
+
+        assert detenidos(incidents) == []
+
+        # Y sigue siendo un único incidente, no uno por actualización.
+        assert len({i.incident_id for i in colisiones(incidents)}) == 1
+
+    def test_el_choque_se_sigue_confirmando(self):
+        # Suprimir las paradas no puede romper la confirmación: es la MISMA
+        # parada la que confirma el choque.
+        engine = IncidentEngine()
+
+        a = make_track(1, box=(100, 100, 140, 140))
+        b = make_track(2, box=(200, 100, 240, 140))
+
+        incidents = self.choque_que_inmoviliza(engine, a, b)
+
+        assert colisiones(incidents)[-1].data["aftermath"] == "immobilized"
+
+    def test_no_reaparece_cuando_caduca_el_cluster(self):
+        # El cluster se olvida a los pocos segundos. Si la parada solo se
+        # hubiera saltado, el vehículo seguiría quieto y saldría entonces:
+        # el mismo duplicado, más tarde y sin nada que lo relacione.
+        engine = IncidentEngine()
+
+        a = make_track(1, box=(100, 100, 140, 140))
+        b = make_track(2, box=(200, 100, 240, 140))
+
+        incidents = self.choque_que_inmoviliza(
+            engine, a, b, frames=IncidentEngine.MERGE_WINDOW * 5
+        )
+
+        assert detenidos(incidents) == []
+
+    def test_un_vehiculo_ajeno_al_choque_si_se_reporta(self):
+        # La supresión se limita a los implicados. Otro vehículo que se para
+        # en el mismo frame no tiene nada que ver y sigue siendo un incidente.
+        engine = IncidentEngine()
+
+        a = make_track(1, box=(100, 100, 140, 140))
+        b = make_track(2, box=(200, 100, 240, 140))
+        c = make_track(3, box=(500, 400, 540, 440))
+
+        acercar(engine, a, b, IMPACTO)
+
+        parados = [make_motion(1, speed=STOPPED), make_motion(2, speed=STOPPED)]
+
+        # c venía circulando y frena en seco, sin relación con el choque.
+        engine.process([a, b, c], parados + [
+            make_motion(3, speed=MOVING, abrupt_change=True, acceleration=-6.0)
+        ])
+
+        incidents = []
+        for _ in range(IncidentEngine.STOPPED_FRAMES + 2):
+            incidents.extend(
+                engine.process(
+                    [a, b, c], parados + [make_motion(3, speed=STOPPED)]
+                )
+            )
+
+        assert [i.track_ids for i in detenidos(incidents)] == [[3]]

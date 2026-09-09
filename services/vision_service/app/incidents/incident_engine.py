@@ -526,6 +526,20 @@ class IncidentEngine:
             if not self._ever_moved(track_id):
                 continue
 
+            # Esta parada ya está contada: ES el desenlace del choque que ya
+            # se reportó, no un incidente aparte. Sin esto, un choque que
+            # inmoviliza a dos vehículos sale como TRES incidentes —la
+            # colisión y una parada por cabeza— y quien abre la bandeja ve un
+            # sistema que no sabe contar. La información no se pierde: el
+            # incidente de colisión lleva a los dos implicados y su desenlace.
+            if self._explained_by_collision(track_id):
+                # Se marca como reportada aunque no se emita nada. Si no, al
+                # caducar el cluster unos segundos después el vehículo seguiría
+                # quieto y la parada saldría entonces: el mismo duplicado, solo
+                # que más tarde y más difícil de relacionar.
+                self._stopped_reported.add(track_id)
+                continue
+
             abrupt_stop = self._stop_was_abrupt.get(track_id, False)
 
             if not abrupt_stop and still < self.STOPPED_FRAMES_LONG:
@@ -965,6 +979,30 @@ class IncidentEngine:
             return raw * self.KEPT_MOVING_FACTOR
 
         return min(raw, self.UNCONFIRMED_CAP)
+
+    def _explained_by_collision(self, track_id: int) -> bool:
+        """
+        Si la parada de este vehículo ya la explica una colisión reportada.
+
+        Se exige la MISMA relación que usa la confirmación por desenlace: que
+        la parada haya empezado a raíz del incidente. Un vehículo que ya
+        estaba detenido antes del contacto no queda tapado por él —su parada
+        es un hecho independiente— y se reporta como siempre.
+        """
+
+        still = self._still_frames.get(track_id, 0)
+
+        if not still:
+            return False
+
+        stop_started = self._frame - still
+
+        return any(
+            track_id in cluster["track_ids"]
+            and stop_started
+            >= cluster["first_frame"] - self.AFTERMATH_STOP_TOLERANCE
+            for cluster in self._clusters
+        )
 
     def _stopped_since_incident(self, cluster: dict) -> bool:
         """
