@@ -237,6 +237,68 @@ La suite corre en menos de un segundo y no necesita ni el modelo ni el video.
 
 ---
 
+## Despliegue con Docker
+
+```bash
+docker compose up --build                                          # sin GPU
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build   # con GPU
+```
+
+Levanta Postgres, aplica las migraciones y arranca el servicio en el 8000. Las
+migraciones corren como un servicio de un solo uso del que depende el API, así
+que este nunca arranca contra un esquema viejo.
+
+### Antes de la primera vez
+
+En el `.env` (ver [`.env.example`](.env.example)):
+
+| Variable | |
+|---|---|
+| `POSTGRES_PASSWORD` | **Sin valor por defecto.** El compose se niega a arrancar sin ella, en vez de levantar una base con una contraseña conocida |
+| `JWT_SECRET` | Sin él el servicio arranca y rechaza todo inicio de sesión |
+| `GEMINI_API_KEY` | Opcional; sin ella no se ofrece "Analizar el caso" |
+
+### Qué NO va dentro de la imagen
+
+El modelo (`models/`) y los videos (`videos/`) se montan como volúmenes de
+solo lectura: no están en git, pesan, y hornearlos obligaría a reconstruir
+tres gigas para cambiar de modelo. El `.env` tampoco entra — los secretos se
+pasan como variables de entorno.
+
+La evidencia va en un **volumen con nombre**, no en un bind mount, para que el
+dueño lo ponga Docker y el usuario no-root de la imagen pueda escribir sin
+pelearse con los permisos del anfitrión. Para sacarla:
+
+```bash
+docker compose cp vision:/app/outputs/incidents ./outputs/
+```
+
+### GPU
+
+Va en un archivo aparte porque `deploy.devices` **hace fallar el arranque** en
+una máquina sin NVIDIA, y el compose base tiene que levantar en cualquier
+parte. Requiere en el anfitrión el driver y `nvidia-container-toolkit`; en
+Windows, Docker Desktop sobre WSL2 con el driver del anfitrión. Comprobar que
+Docker ve la GPU antes de pelearse con lo demás:
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
+```
+
+Para construir sin CUDA, `TORCH_INDEX=https://download.pytorch.org/whl/cpu`.
+La imagen pasa de unos 7 GB a unos 2, y la inferencia va notablemente más
+lenta.
+
+### CORS
+
+El compose fija `VISION_CORS_ORIGINS` explícitamente. Corriendo a mano el
+valor por defecto sigue siendo `*`, que es cómodo en desarrollo, pero **desde
+que hay login ya no es inocuo**: cualquier página que abra un operario puede
+llamar a la API, y el token viaja en la query del WebSocket. El servicio lo
+registra como aviso al arrancar.
+
+---
+
 ## Datos personales y retención
 
 El sistema graba vía pública, así que la evidencia que guarda contiene placas

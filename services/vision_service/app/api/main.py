@@ -137,6 +137,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+if _allow_all:
+    # Se avisa y no se bloquea: el comodín es cómodo en desarrollo y romperlo
+    # por sorpresa sería peor. Pero desde que hay login esto ya no es inocuo,
+    # así que tiene que constar: cualquier página que un operario abra puede
+    # llamar a esta API, y el token viaja en la query del WebSocket.
+    logger.warning(
+        "CORS abierto a cualquier origen: VISION_CORS_ORIGINS no está fijado. "
+        "En un despliegue real hay que listar los orígenes permitidos."
+    )
+
 app.include_router(auth.router)
 app.include_router(shifts.router)
 app.include_router(analytics.router)

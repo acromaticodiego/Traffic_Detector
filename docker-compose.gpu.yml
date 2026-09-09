@@ -1,0 +1,25 @@
+# Añade la GPU al compose base:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+#
+# Requiere en el ANFITRIÓN el driver NVIDIA y nvidia-container-toolkit. En
+# Windows, Docker Desktop sobre WSL2 con el driver del anfitrión: no se
+# instala CUDA dentro de WSL.
+#
+# Comprobar que Docker ve la GPU antes de pelearse con esto:
+#
+#   docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu24.04 nvidia-smi
+#
+# Va aparte porque `deploy.devices` hace fallar el arranque en una máquina sin
+# NVIDIA, y el compose base tiene que levantar en cualquier parte.
+
+services:
+
+  vision:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
