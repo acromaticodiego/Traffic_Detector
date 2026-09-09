@@ -17,6 +17,7 @@ from ..tracking.tracker import ByteTrackTracker
 from ..tracking.track_manager import TrackManager
 from ..motion.motion_analyzer import MotionAnalyzer
 from ..events.event_engine import EventEngine
+from ..geometry.homography import GroundPlane
 from ..incidents.evidence import IncidentEvidence
 from ..incidents.incident_engine import IncidentEngine
 from ..vision_engine import VisionEngine
@@ -57,6 +58,8 @@ def create_detector() -> YOLODetector:
 def build_vision_engine(
     detector: YOLODetector,
     camera_id: str = "",
+    ground_plane: GroundPlane | None = None,
+    fps: float = 25.0,
 ) -> VisionEngine:
     """
     Build a fresh VisionEngine around an already
@@ -92,6 +95,6 @@ def build_vision_engine(
         track_manager=TrackManager(),
         event_engine=EventEngine(),
         motion_analyzer=MotionAnalyzer(),
-        incident_engine=IncidentEngine(),
+        incident_engine=IncidentEngine(ground_plane=ground_plane, fps=fps),
         evidence=evidence,
     )

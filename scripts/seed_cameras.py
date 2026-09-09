@@ -33,6 +33,7 @@ FIELDS = (
     "occupancy_high",
     "free_speed",
     "notes",
+    "homography",
 )
 
 
@@ -68,6 +69,7 @@ def main() -> None:
                 "occupancy_high": camera.occupancy_high,
                 "free_speed": camera.free_speed,
                 "notes": camera.notes,
+                "homography": camera.homography,
             }
 
             if row is None:

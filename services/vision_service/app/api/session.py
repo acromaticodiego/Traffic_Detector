@@ -27,6 +27,7 @@ from typing import Any, Optional
 import cv2
 
 from ..detection.detector import YOLODetector
+from ..geometry.homography import CalibrationError, GroundPlane
 from .cameras import Camera, registry_source
 from .config import settings
 from .road_roi import build_road_roi
@@ -56,7 +57,10 @@ class VideoSession:
         self._camera = camera
         self._stride = max(1, stride or settings.frame_stride)
 
-        self._engine = build_vision_engine(detector, camera.id)
+        # El motor se construye en open(), no aquí: necesita los fps del
+        # video para poder expresar el TTC en segundos, y esos no se conocen
+        # hasta abrir la fuente.
+        self._engine = None
 
         # Every scene knob comes from the camera, not from the global config:
         # two cameras in the same deployment have different geometry, so
@@ -118,6 +122,16 @@ class VideoSession:
 
         self._traffic.configure(self.width, self.height, self.fps)
 
+        self._engine = build_vision_engine(
+            self._detector,
+            self._camera.id,
+            ground_plane=self._ground_plane(),
+            # El motor procesa 1 de cada `stride` frames, así que su reloj
+            # corre a esa fracción de los fps del video. Pasarle los fps
+            # crudos haría que un TTC de 3 s se reportara como 1 s.
+            fps=self.fps / self._stride,
+        )
+
         return {
             "type": "meta",
             # Lets the frontend notice it is talking to a service older than
@@ -137,6 +151,34 @@ class VideoSession:
             # draw it over the video while calibrating. null = whole frame.
             "road_roi": self._traffic.roi.polygon,
         }
+
+    def _ground_plane(self) -> Optional[GroundPlane]:
+        """
+        La calibración de esta cámara, o None si no tiene o está corrupta.
+
+        Una homografía inválida no puede impedir que la cámara funcione: se
+        avisa y se sigue midiendo en píxeles, que es como funcionaba antes de
+        que existiera la calibración.
+        """
+
+        if not self._camera.homography:
+            logger.info(
+                "La cámara '%s' no está calibrada: el motor medirá en "
+                "píxeles. Calibrar con scripts/homography_picker.py.",
+                self._camera.id,
+            )
+            return None
+
+        try:
+            return GroundPlane.from_values(self._camera.homography)
+        except CalibrationError as error:
+            logger.warning(
+                "La homografía de '%s' no es utilizable (%s); se sigue en "
+                "píxeles.",
+                self._camera.id,
+                error,
+            )
+            return None
 
     def start(self) -> None:
         self._warn_if_incidents_will_not_persist()
@@ -201,7 +243,8 @@ class VideoSession:
             self._cap.release()
             self._cap = None
 
-        self._engine.reset()
+        if self._engine is not None:
+            self._engine.reset()
 
     # ------------------------------------------------------------------
     # worker thread

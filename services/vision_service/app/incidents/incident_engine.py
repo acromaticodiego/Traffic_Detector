@@ -1,6 +1,7 @@
 from typing import Optional
 import math
 
+from ..geometry.homography import CalibrationError, GroundPlane, ground_point
 from ..tracking.track_state import TrackState
 from ..motion.motion_analyzer import MotionAnalysis
 
@@ -74,6 +75,77 @@ class IncidentEngine:
     ALERT_CONFIDENCE = 0.80
 
     # ==========================================
+    # CONFIGURATION - metric conflict (needs calibration)
+    # ==========================================
+    #
+    # Con la cámara calibrada el motor deja de razonar en píxeles. Y el dato
+    # que importa NO es la distancia: medidos sobre el asfalto, los pares que
+    # este motor venía marcando estaban a metros o menos unos de otros, que
+    # es lo normal en tráfico urbano denso. Estar cerca no distingue nada.
+    #
+    # Lo que distingue un conflicto es la DINÁMICA: a qué velocidad se cierra
+    # la pareja y en cuántos segundos se tocarían si nadie reaccionara. Es el
+    # TTC (time-to-collision) de la literatura de seguridad vial, donde por
+    # debajo de ~1,5 s se considera un conflicto serio.
+
+    # Segundos de TTC por debajo de los cuales la pareja está en conflicto.
+    TTC_CONFLICT_S = 1.5
+
+    # Velocidad de cierre mínima (m/s) para tomarse en serio un TTC. Dos
+    # vehículos parados en un trancón tienen TTC infinito y no molestan, pero
+    # el ruido de medición puede fabricar cierres diminutos.
+    MIN_CLOSING_SPEED = 0.5
+
+    # Separación (m) por debajo de la cual dos vehículos están tan juntos que
+    # cualquier cierre importa. Dos carros lado a lado ocupan ~4 m de ancho.
+    CONTACT_DISTANCE_M = 1.0
+
+    # ==========================================
+    # CONFIGURATION - aftermath confirmation
+    # ==========================================
+    #
+    # Two boxes touching in the image says almost nothing: the camera
+    # projects a 3D scene onto a plane, so a bus in a far lane and a car in
+    # a near one can overlap perfectly while being metres apart. That single
+    # fact is behind most of this engine's false positives, and no threshold
+    # on pixel geometry can fix it.
+    #
+    # What a real crash does leave behind is unambiguous and observable: it
+    # IMMOBILISES at least one of the vehicles. So contact alone is now only
+    # a suspicion, and the incident is confirmed or dropped by what happens
+    # in the seconds after it.
+    #
+    # This mirrors how deployed incident-detection systems work: they report
+    # the consequence (a stopped vehicle, a queue forming) rather than the
+    # instant of impact, because the consequence is what a camera can
+    # actually see.
+
+    # Processed frames to wait for one of the vehicles to stop before
+    # concluding that they simply drove on.
+    AFTERMATH_WINDOW = 90
+
+    # Consecutive stopped frames that count as "immobilised".
+    AFTERMATH_STOP_FRAMES = 20
+
+    # The stop has to START around the incident. A vehicle already parked
+    # before the contact is not evidence of anything, and this is exactly
+    # the case a naive check would confirm.
+    AFTERMATH_STOP_TOLERANCE = 8
+
+    # Ceiling on the confidence of an incident whose aftermath is still
+    # unknown. Below ALERT_CONFIDENCE on purpose: nothing reaches
+    # "confirmed" on geometry alone any more.
+    UNCONFIRMED_CAP = 0.75
+
+    # Added once a vehicle is confirmed immobilised.
+    AFTERMATH_BONUS = 0.15
+
+    # Applied when the window closes and everyone kept driving. Not zero:
+    # the detection still happened and a reviewer may want to see it, but it
+    # drops to the bottom of the queue.
+    KEPT_MOVING_FACTOR = 0.5
+
+    # ==========================================
     # CONFIGURATION - stopped vehicle
     # ==========================================
 
@@ -101,10 +173,31 @@ class IncidentEngine:
     # INIT
     # ==========================================
 
-    def __init__(self):
+    def __init__(
+        self,
+        ground_plane: Optional["GroundPlane"] = None,
+        fps: float = 25.0,
+    ):
+        """
+        `ground_plane` es la cámara calibrada contra el asfalto. Con ella el
+        motor razona en metros y segundos; sin ella se comporta exactamente
+        como antes, en píxeles. Una cámara sin calibrar no puede quedarse sin
+        detección solo porque nadie haya marcado cuatro puntos todavía.
+        """
+
+        self._plane = ground_plane
+        self._fps = max(fps, 1.0)
 
         # Processed-frame counter (this engine is called once per frame).
         self._frame = 0
+
+        # Posición en metros de cada track, y la del frame anterior. Es lo
+        # que permite calcular a qué velocidad se cierra una pareja, que es
+        # el dato que de verdad separa un conflicto del tráfico normal:
+        # en una vía urbana dos vehículos a dos metros son la norma, no una
+        # anomalía, así que la distancia por sí sola no discrimina nada.
+        self._world: dict[int, tuple[float, float]] = {}
+        self._world_prev: dict[int, tuple[float, float]] = {}
 
         # Pairs that already produced a collision hit (won't re-fire).
         self.collision_pairs: set[tuple[int, int]] = set()
@@ -553,6 +646,15 @@ class IncidentEngine:
 
         self.candidate_frames.pop(pair, None)
 
+        # --------------------------------------
+        # CONFLICTO EN UNIDADES FISICAS
+        # --------------------------------------
+
+        metrics = self._conflict_metrics(track_a, track_b)
+
+        if metrics is not None:
+            confidence = self._apply_conflict(confidence, metrics)
+
         return {
             "pair": pair,
             "track_ids": [track_a.track_id, track_b.track_id],
@@ -571,6 +673,7 @@ class IncidentEngine:
                 "speed_b": round(speed_b, 2),
                 "acceleration_a": round(motion_a.acceleration or 0, 2),
                 "acceleration_b": round(motion_b.acceleration or 0, 2),
+                **(metrics or {}),
             },
         }
 
@@ -623,13 +726,15 @@ class IncidentEngine:
 
     def _cluster_incident(self, cluster: dict) -> IncidentCandidate:
 
+        confidence = self._effective_confidence(cluster)
+
         track_ids = sorted(cluster["track_ids"])
 
         return IncidentCandidate(
             incident_type="possible_collision",
             incident_id=cluster["id"],
             track_ids=track_ids,
-            confidence=cluster["confidence"],
+            confidence=confidence,
             bbox=dict(cluster["bbox"]),
             data={
                 **cluster["data"],
@@ -637,13 +742,208 @@ class IncidentEngine:
                 "first_frame": cluster["first_frame"],
                 "last_frame": cluster["last_frame"],
                 "detections": cluster["detections"],
+                # Qué pasó DESPUÉS del contacto, que es lo que decide si esto
+                # fue un choque. Se publica para que quien revisa vea en qué
+                # se basó la confianza y no solo el número.
+                "aftermath": cluster["aftermath"],
+                # La puntuación geométrica cruda, antes de aplicar el
+                # desenlace. Útil para recalibrar los pesos más adelante
+                # contra los veredictos humanos.
+                "raw_confidence": round(cluster["confidence"], 3),
                 "severity": (
                     "confirmed"
-                    if cluster["confidence"] >= self.ALERT_CONFIDENCE
+                    if confidence >= self.ALERT_CONFIDENCE
                     else "pending"
                 ),
             },
         )
+
+    # ==========================================
+    # METRIC CONFLICT
+    # ==========================================
+
+    @property
+    def metric(self) -> bool:
+        """Si esta corrida puede razonar en metros."""
+        return self._plane is not None
+
+    def _update_world_positions(self, tracks: list[TrackState]) -> None:
+        """Dónde está cada vehículo sobre el asfalto, en metros."""
+
+        if self._plane is None:
+            return
+
+        self._world_prev = self._world
+        current: dict[int, tuple[float, float]] = {}
+
+        for track in tracks:
+            bbox = {
+                "x1": track.x1, "y1": track.y1,
+                "x2": track.x2, "y2": track.y2,
+            }
+
+            try:
+                # El punto de contacto con el suelo, no el centro de la caja:
+                # el centro flota a media altura del vehículo y proyectarlo
+                # lo manda metros más lejos, tanto más cuanto más alto sea.
+                current[track.track_id] = self._plane.to_world(
+                    ground_point(bbox)
+                )
+            except CalibrationError:
+                # Cae sobre el horizonte: no está sobre la vía.
+                continue
+
+        self._world = current
+
+    def _conflict_metrics(
+        self,
+        track_a: TrackState,
+        track_b: TrackState,
+    ) -> Optional[dict]:
+        """
+        Separación, velocidad de cierre y TTC de una pareja, en unidades
+        físicas. None si la cámara no está calibrada o falta información.
+        """
+
+        if self._plane is None:
+            return None
+
+        a = self._world.get(track_a.track_id)
+        b = self._world.get(track_b.track_id)
+
+        if a is None or b is None:
+            return None
+
+        separation = math.hypot(b[0] - a[0], b[1] - a[1])
+
+        metrics = {
+            "separation_m": round(separation, 2),
+            "closing_speed_ms": None,
+            "ttc_s": None,
+        }
+
+        prev_a = self._world_prev.get(track_a.track_id)
+        prev_b = self._world_prev.get(track_b.track_id)
+
+        if prev_a is None or prev_b is None:
+            return metrics
+
+        previous = math.hypot(prev_b[0] - prev_a[0], prev_b[1] - prev_a[1])
+
+        # Cuánto se acortó la distancia en este frame, llevado a m/s.
+        closing = (previous - separation) * self._fps
+
+        metrics["closing_speed_ms"] = round(closing, 2)
+
+        if closing >= self.MIN_CLOSING_SPEED:
+            metrics["ttc_s"] = round(separation / closing, 2)
+
+        return metrics
+
+    def _apply_conflict(self, confidence: float, metrics: dict) -> float:
+        """
+        Corrige la puntuación geométrica con lo que dice la física.
+
+        La geometría de la imagen dice si dos cajas se tocan; eso en una vía
+        con tráfico pasa constantemente. Estas señales dicen si además se
+        estaban cerrando de forma peligrosa, que es lo que separa un
+        conflicto de dos vehículos circulando normalmente uno al lado del
+        otro.
+        """
+
+        ttc = metrics.get("ttc_s")
+        separation = metrics.get("separation_m")
+        closing = metrics.get("closing_speed_ms")
+
+        # Un TTC por debajo del umbral es la señal más fuerte que existe sin
+        # esperar al desenlace: chocarían en menos de segundo y medio.
+        if ttc is not None and ttc <= self.TTC_CONFLICT_S:
+            return min(confidence + 0.20, 1.0)
+
+        # Se tocan en la imagen pero no se estaban cerrando y no están
+        # pegados sobre el asfalto: es tráfico normal visto desde una cámara
+        # que aplasta la escena. Es el caso que más falsos positivos produce.
+        if (
+            separation is not None
+            and separation > self.CONTACT_DISTANCE_M
+            and (closing is None or closing < self.MIN_CLOSING_SPEED)
+        ):
+            return confidence * 0.5
+
+        return confidence
+
+    # ==========================================
+    # AFTERMATH
+    # ==========================================
+
+    def _effective_confidence(self, cluster: dict) -> float:
+        """
+        La confianza que sale del motor, ya corregida por el desenlace.
+
+        La puntuación geométrica sola nunca llega a "confirmado": dos cajas
+        que se tocan en la imagen son una sospecha, no un hecho.
+        """
+
+        raw = cluster["confidence"]
+        aftermath = cluster["aftermath"]
+
+        if aftermath == "immobilized":
+            return min(raw + self.AFTERMATH_BONUS, 1.0)
+
+        if aftermath == "kept_moving":
+            return raw * self.KEPT_MOVING_FACTOR
+
+        return min(raw, self.UNCONFIRMED_CAP)
+
+    def _stopped_since_incident(self, cluster: dict) -> bool:
+        """
+        Si alguno de los implicados se quedó quieto A RAÍZ del incidente.
+
+        La condición de que la parada haya EMPEZADO cerca del contacto es lo
+        que distingue un choque de un carro que ya llevaba rato parqueado
+        justo donde otro pasó cerca: sin ella, el parqueadero de una esquina
+        confirmaría incidentes toda la tarde.
+        """
+
+        for track_id in cluster["track_ids"]:
+
+            still = self._still_frames.get(track_id, 0)
+
+            if still < self.AFTERMATH_STOP_FRAMES:
+                continue
+
+            stop_started = self._frame - still
+
+            if stop_started >= cluster["first_frame"] - self.AFTERMATH_STOP_TOLERANCE:
+                return True
+
+        return False
+
+    def _update_aftermath(self) -> list[IncidentCandidate]:
+        """
+        Resuelve los incidentes que siguen a la espera de su desenlace.
+
+        Devuelve los que cambiaron de estado, para que el cliente actualice
+        la confianza que ya había mostrado.
+        """
+
+        updated: list[IncidentCandidate] = []
+
+        for cluster in self._clusters:
+
+            if cluster["aftermath"] != "pending":
+                continue
+
+            if self._stopped_since_incident(cluster):
+                cluster["aftermath"] = "immobilized"
+                updated.append(self._cluster_incident(cluster))
+                continue
+
+            if self._frame - cluster["first_frame"] > self.AFTERMATH_WINDOW:
+                cluster["aftermath"] = "kept_moving"
+                updated.append(self._cluster_incident(cluster))
+
+        return updated
 
     # ==========================================
     # PROCESS
@@ -663,6 +963,9 @@ class IncidentEngine:
 
         # 1. per-track state (recency, speed peak, stopped streaks)
         self._update_track_state(tracks, motion_by_id)
+
+        # 1b. posiciones en metros, si la cámara está calibrada
+        self._update_world_positions(tracks)
 
         # 2. stopped vehicles
         incidents.extend(self._detect_stopped(tracks, motion_by_id))
@@ -696,7 +999,10 @@ class IncidentEngine:
                 if hit is not None:
                     hits.append(hit)
 
-        # 4. merge hits into incident clusters
+        # 4. resolve the aftermath of incidents already reported
+        incidents.extend(self._update_aftermath())
+
+        # 5. merge hits into incident clusters
         for hit in hits:
 
             self.collision_pairs.add(hit["pair"])
@@ -716,6 +1022,9 @@ class IncidentEngine:
                     "first_frame": self._frame,
                     "last_frame": self._frame,
                     "detections": 1,
+                    # Nace como sospecha. Lo que pase en los próximos
+                    # segundos lo confirma o lo degrada.
+                    "aftermath": "pending",
                     "data": dict(hit["data"]),
                 }
                 self._clusters.append(cluster)
@@ -746,11 +1055,11 @@ class IncidentEngine:
                 if after != before:
                     incidents.append(self._cluster_incident(cluster))
 
-        # 5. drop candidate counters for pairs no longer present
+        # 6. drop candidate counters for pairs no longer present
         for pair in set(self.candidate_frames) - active_pairs:
             self.candidate_frames.pop(pair, None)
 
-        # 6. forget very old clusters (keep a margin past the merge window)
+        # 7. forget very old clusters (keep a margin past the merge window)
         self._clusters = [
             c
             for c in self._clusters

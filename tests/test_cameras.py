@@ -84,10 +84,54 @@ class TestParseoDeUnaEntrada:
             "lat",
             "lng",
             "calibrated",
+            "metric",
             "available",
             "thresholds",
             "notes",
         }
+
+
+class TestHomografia:
+    """
+    La calibración que convierte píxeles en metros. Se valida al CARGAR y no
+    al usarse porque una homografía a medias no rompe nada: el servicio
+    arranca igual y empieza a medir distancias equivocadas en silencio, que
+    es la peor forma de fallar.
+    """
+
+    def test_una_camara_sin_homografia_no_es_metrica(self):
+        camera = parse(id="c1", source="videos/input/demo.mp4")
+
+        assert camera.homography is None
+        assert camera.metric is False
+        assert camera.public()["metric"] is False
+
+    def test_una_camara_calibrada_lo_publica(self):
+        camera = parse(
+            id="c1",
+            source="videos/input/demo.mp4",
+            homography=[1, 0, 0, 0, 1, 0, 0, 0, 1],
+        )
+
+        assert camera.metric is True
+        assert camera.public()["metric"] is True
+        assert len(camera.homography) == 9
+
+    def test_una_matriz_incompleta_se_rechaza_al_cargar(self):
+        with pytest.raises(ValueError, match="9 valores"):
+            parse(
+                id="c1",
+                source="videos/input/demo.mp4",
+                homography=[1, 0, 0, 0, 1],
+            )
+
+    def test_valores_que_no_son_numeros_se_rechazan(self):
+        with pytest.raises(ValueError, match="números"):
+            parse(
+                id="c1",
+                source="videos/input/demo.mp4",
+                homography=["a", 0, 0, 0, 1, 0, 0, 0, 1],
+            )
 
 
 class TestCamerasYamlDelRepo:

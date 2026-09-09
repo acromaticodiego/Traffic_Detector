@@ -72,6 +72,11 @@ class CameraRow(Base):
 
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
+    # Homografía imagen -> metros sobre el asfalto: nueve valores, o nulo si
+    # la cámara no está calibrada. En JSONB y no en nueve columnas porque
+    # siempre se leen y escriben juntos: son una matriz, no nueve ajustes.
+    homography: Mapped[list[float] | None] = mapped_column(JSONB)
+
     # Permite retirar una cámara sin perder su histórico de incidentes.
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
 
