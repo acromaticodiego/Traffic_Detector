@@ -183,7 +183,6 @@ class VideoSession:
     def start(self) -> None:
         self._warn_if_incidents_will_not_persist()
 
-        incident_writer.reset_seen()
         incident_writer.start()
 
         self._thread = threading.Thread(
@@ -357,7 +356,9 @@ class VideoSession:
                     # Queued, never written inline: the vision loop must not
                     # wait on Postgres. Repeats of the same incident across
                     # frames are dropped by the writer.
-                    incident_writer.submit(self._camera.id, inc, frame_id)
+                    incident_writer.submit(
+                        self._camera.id, inc, frame_id, self._camera.source_key
+                    )
 
         except Exception as error:  # noqa: BLE001
             self._put({"type": "error", "message": str(error)})

@@ -7,6 +7,13 @@ los incidentes se encolan y los escribe un hilo aparte.
 
 La cola es acotada y descarta lo que no quepa: perder una fila de histórico es
 preferible a frenar la inferencia en vivo.
+
+Deduplicar es cosa de dos capas. El `set` en memoria evita encolar el mismo
+incidente en frames consecutivos, que es lo habitual, pero solo sabe de lo que
+ha visto este proceso. La restricción única de la tabla es la que impide de
+verdad los duplicados: sin ella, reprocesar un video volvía a insertar su
+histórico entero, y la memoria no ayudaba porque cada sesión empezaba en
+blanco.
 """
 
 from __future__ import annotations
@@ -35,12 +42,15 @@ class IncidentWriter:
         self._started = False
         self._lock = threading.Lock()
 
-        # Ids ya escritos en esta corrida. El motor reporta el mismo incidente
-        # en frames consecutivos y la tabla guarda uno por evento, no por frame.
-        self._seen: set[tuple[str, str]] = set()
+        # Ids ya encolados, por cámara y pasada. El motor reporta el mismo
+        # incidente en frames consecutivos y la tabla guarda uno por evento,
+        # no por frame. Ya no se vacía entre sesiones: hacerlo era lo que
+        # dejaba reinsertar el histórico completo en cada reconexión.
+        self._seen: set[tuple[str, str, str]] = set()
 
         self.dropped = 0
         self.written = 0
+        self.duplicates = 0
         self.failed = 0
 
     # ------------------------------------------------------------------
@@ -71,14 +81,20 @@ class IncidentWriter:
             self._thread.join(timeout=timeout)
             self._thread = None
 
-    def reset_seen(self) -> None:
-        """Al reiniciar una sesión los ids de agrupación vuelven a empezar."""
-        self._seen.clear()
+    def submit(
+        self,
+        camera_id: str,
+        incident: dict[str, Any],
+        frame_id: int,
+        source_key: str,
+    ) -> None:
+        """Encola un incidente si es la primera vez que se ve.
 
-    # ------------------------------------------------------------------
-
-    def submit(self, camera_id: str, incident: dict[str, Any], frame_id: int) -> None:
-        """Encola un incidente si es la primera vez que se ve."""
+        `source_key` identifica la pasada del pipeline de la que sale. Entra
+        en la clave porque el id de agrupación se deriva de los track_id, que
+        vuelven a empezar en cada pasada: sin él, dos incidentes distintos de
+        dos videos distintos se taparían el uno al otro.
+        """
 
         cluster_id = incident.get("incident_id")
 
@@ -86,6 +102,7 @@ class IncidentWriter:
         # tipo más los tracks: el mismo choque entre los mismos vehículos.
         key = (
             camera_id,
+            source_key,
             str(cluster_id)
             if cluster_id
             else f"{incident.get('incident_type')}:{sorted(incident.get('track_ids') or [])}",
@@ -97,7 +114,7 @@ class IncidentWriter:
         self._seen.add(key)
 
         try:
-            self._queue.put_nowait((camera_id, incident, frame_id))
+            self._queue.put_nowait((camera_id, source_key, incident, frame_id))
         except queue.Full:
             self.dropped += 1
 
@@ -142,31 +159,51 @@ class IncidentWriter:
                         error,
                     )
 
-    def _write(self, item: tuple[str, dict[str, Any], int]) -> None:
+    def _write(self, item: tuple[str, str, dict[str, Any], int]) -> None:
+        from sqlalchemy import text
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
         from .models import IncidentRow
         from .session import session_scope
 
-        camera_id, incident, frame_id = item
+        camera_id, source_key, incident, frame_id = item
 
         bbox = incident.get("bbox")
 
-        with session_scope() as session:
-            session.add(
-                IncidentRow(
-                    camera_id=camera_id,
-                    cluster_id=incident.get("incident_id"),
-                    incident_type=incident["incident_type"],
-                    confidence=float(incident["confidence"]),
-                    video_t=incident.get("t"),
-                    frame_id=frame_id,
-                    track_ids=list(incident.get("track_ids") or []),
-                    bbox=dict(bbox) if isinstance(bbox, dict) else bbox,
-                    data=incident.get("data") or {},
-                    evidence_path=incident.get("evidence_path"),
-                )
+        # ON CONFLICT DO NOTHING, y no un INSERT a secas, porque la base es el
+        # único sitio que sabe lo que se escribió en una pasada anterior: el
+        # `set` en memoria se va con el proceso. Es lo que hace que reprocesar
+        # un video sea idempotente en vez de duplicar su histórico.
+        statement = (
+            pg_insert(IncidentRow)
+            .values(
+                camera_id=camera_id,
+                source_key=source_key,
+                cluster_id=incident.get("incident_id"),
+                incident_type=incident["incident_type"],
+                confidence=float(incident["confidence"]),
+                video_t=incident.get("t"),
+                frame_id=frame_id,
+                track_ids=list(incident.get("track_ids") or []),
+                bbox=dict(bbox) if isinstance(bbox, dict) else bbox,
+                data=incident.get("data") or {},
+                evidence_path=incident.get("evidence_path"),
             )
+            .on_conflict_do_nothing(
+                index_elements=["camera_id", "source_key", "cluster_id"],
+                index_where=text("cluster_id IS NOT NULL"),
+            )
+        )
 
-        self.written += 1
+        with session_scope() as session:
+            escritas = session.execute(statement).rowcount
+
+        # Un duplicado no es un fallo: es la señal de que este video ya se
+        # había analizado. Se cuenta aparte para poder distinguirlo.
+        if escritas:
+            self.written += 1
+        else:
+            self.duplicates += 1
 
 
 # Una sola cola para todo el proceso: hoy corre una sesión a la vez, y cuando

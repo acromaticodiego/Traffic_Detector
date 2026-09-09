@@ -243,6 +243,17 @@ class IncidentRow(Base):
     # entre cámaras, así que no sirve como clave por sí solo.
     cluster_id: Mapped[str | None] = mapped_column(String(128))
 
+    # De qué pasada del pipeline viene este incidente. Para una fuente en
+    # fichero es la huella del archivo, así que reprocesar el mismo video
+    # reconoce lo ya escrito en vez de duplicarlo, y sustituir el archivo
+    # empieza un histórico nuevo.
+    #
+    # Hace falta junto a `cluster_id` porque ese id se deriva de los
+    # track_id, que vuelven a empezar en cada pasada: es único dentro de una
+    # corrida y solo dentro de ella. Los dos juntos sí identifican un
+    # incidente.
+    source_key: Mapped[str] = mapped_column(String(64), nullable=False)
+
     incident_type: Mapped[str] = mapped_column(String(64), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
 
@@ -322,6 +333,19 @@ class IncidentRow(Base):
         # La consulta de la bandeja de revisión: "lo que falta por revisar,
         # de más reciente a más antiguo".
         Index("ix_incidents_review", "review_status", detected_at.desc()),
+        # Un incidente por agrupación y por pasada. Es lo que hace que
+        # reprocesar un video sea idempotente: sin esto cada reconexión
+        # volvía a insertar el histórico entero. Parcial porque un incidente
+        # sin id de agrupación no se puede deduplicar, y esas filas no deben
+        # bloquearse entre sí.
+        Index(
+            "uq_incidents_source_cluster",
+            "camera_id",
+            "source_key",
+            "cluster_id",
+            unique=True,
+            postgresql_where=cluster_id.isnot(None),
+        ),
     )
 
     def __repr__(self) -> str:

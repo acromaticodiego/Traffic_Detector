@@ -18,6 +18,7 @@ tal cual.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -78,6 +79,32 @@ class Camera:
         """Sin ROI la ocupación se mide sobre el frame entero: sirve, pero
         el cielo y los andenes la diluyen."""
         return bool(self.roi.strip())
+
+    @property
+    def source_key(self) -> str:
+        """
+        Huella de la fuente: identifica una pasada del pipeline.
+
+        Analizar el mismo archivo dos veces da la misma huella, y por eso
+        reprocesarlo reconoce los incidentes ya guardados en vez de
+        duplicarlos. Sustituir el archivo —aunque conserve el nombre— la
+        cambia, y el histórico nuevo no se mezcla con el viejo.
+
+        Va con la ruta, el tamaño y la fecha en vez de con el contenido
+        porque leer decenas de megas para hashearlos, cada vez que arranca
+        una sesión, costaría más que todo lo que ahorra. Es el mismo criterio
+        que ya usa la caché de /api/video.
+        """
+
+        try:
+            stat = self.source.stat()
+            crudo = f"{self.source.resolve()}:{stat.st_size}:{int(stat.st_mtime)}"
+        except OSError:
+            # Fuente ilegible: la ruta sola sigue agrupando lo de una misma
+            # cámara, que es mejor que inventar una huella nueva cada vez.
+            crudo = str(self.source)
+
+        return hashlib.sha1(crudo.encode("utf-8")).hexdigest()[:16]
 
     def public(self) -> dict[str, Any]:
         """Lo que ve el frontend. La ruta del archivo no sale de aquí."""
