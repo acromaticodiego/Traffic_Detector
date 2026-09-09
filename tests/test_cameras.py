@@ -134,6 +134,60 @@ class TestHomografia:
             )
 
 
+class TestHuellaDeLaFuente:
+    """
+    La huella dice de qué pasada del pipeline viene un incidente.
+
+    De ella depende que reprocesar un video reconozca lo ya guardado en vez de
+    duplicarlo, así que tiene que ser estable para el mismo archivo y distinta
+    en cuanto el archivo cambia.
+    """
+
+    def test_la_misma_fuente_da_siempre_la_misma_huella(self, tmp_path):
+        video = tmp_path / "demo.mp4"
+        video.write_bytes(b"x" * 100)
+
+        primera = parse(id="c1", source=str(video)).source_key
+        segunda = parse(id="c1", source=str(video)).source_key
+
+        assert primera == segunda
+
+    def test_sustituir_el_archivo_cambia_la_huella(self, tmp_path):
+        """Mismo nombre, otro contenido: es un histórico nuevo, no el mismo."""
+
+        video = tmp_path / "demo.mp4"
+        video.write_bytes(b"x" * 100)
+        antes = parse(id="c1", source=str(video)).source_key
+
+        video.write_bytes(b"y" * 250)
+        despues = parse(id="c1", source=str(video)).source_key
+
+        assert antes != despues
+
+    def test_dos_videos_distintos_no_comparten_huella(self, tmp_path):
+        uno = tmp_path / "uno.mp4"
+        otro = tmp_path / "otro.mp4"
+        uno.write_bytes(b"x" * 100)
+        otro.write_bytes(b"x" * 100)
+
+        assert (
+            parse(id="c1", source=str(uno)).source_key
+            != parse(id="c1", source=str(otro)).source_key
+        )
+
+    def test_una_fuente_ilegible_sigue_teniendo_huella(self):
+        """Sin archivo no se puede fechar nada, pero la cámara tiene que poder
+        cargarse igual: el registro se lee mucho antes de que el video haga
+        falta."""
+
+        camera = parse(id="c1", source="videos/input/no-existe.mp4")
+
+        assert len(camera.source_key) == 16
+        assert camera.source_key == parse(
+            id="c1", source="videos/input/no-existe.mp4"
+        ).source_key
+
+
 class TestCamerasYamlDelRepo:
 
     def test_el_registro_del_repo_se_parsea_entero(self):
