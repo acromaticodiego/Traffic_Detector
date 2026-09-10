@@ -26,6 +26,7 @@ Tres decisiones de diseño que conviene no deshacer:
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -69,7 +70,9 @@ def _explain(error: Exception, model: str) -> str:
 
     if code == 429:
         return (
-            "Se agotó la cuota de la API de IA. Vuelve a intentarlo más tarde."
+            f"Se agotó la cuota del plan gratuito para '{model}' (son 20 "
+            f"peticiones al día por modelo). Se renueva mañana, o se puede "
+            f"apuntar GEMINI_MODEL a otro modelo, que tiene su propia cuota."
         )
 
     if isinstance(code, int) and code >= 500:
@@ -112,6 +115,37 @@ inventes daños, heridos ni maniobras que no se vean.
 Habla de lo que es "consistente con" o "poco compatible con" un choque.
 - No repitas los números tal cual; interprétalos.\
 """
+
+
+_RETRY_WAITS = (1.0, 3.0)
+
+
+def _retryable(error: Exception) -> bool:
+    """
+    Si vale la pena volver a intentarlo solo.
+
+    Sí con los errores del servidor: Google devuelve 503 de forma intermitente
+    y el siguiente intento suele pasar. También con los de conexión, que aquí
+    van y vienen.
+
+    NO con un timeout. Reintentar algo que ya tardó un minuto solo multiplica
+    la espera del operario, y si el modelo va lento el segundo intento va a ir
+    igual de lento. Tampoco con los permanentes —modelo retirado, clave mala,
+    cuota agotada— donde insistir no arregla nada y en el caso de la cuota
+    incluso la empeora.
+    """
+
+    code = getattr(error, "code", None)
+
+    if isinstance(code, int):
+        return code >= 500
+
+    nombre = type(error).__name__.lower()
+
+    if "timeout" in nombre:
+        return False
+
+    return "connect" in nombre
 
 
 def _truncated(response: Any) -> bool:
@@ -224,10 +258,10 @@ def generate(incident: dict[str, Any], image: Optional[Path] = None) -> str:
             # perderla no debe cancelar la generación.
             logger.warning("No se pudo adjuntar la evidencia: %s", error)
 
-    try:
-        client = genai.Client(api_key=settings.gemini_api_key)
+    client = genai.Client(api_key=settings.gemini_api_key)
 
-        response = client.models.generate_content(
+    def llamar():
+        return client.models.generate_content(
             model=settings.gemini_model,
             contents=partes,
             config=types.GenerateContentConfig(
@@ -242,16 +276,40 @@ def generate(incident: dict[str, Any], image: Optional[Path] = None) -> str:
             ),
         )
 
-        texto = (response.text or "").strip()
-        cortado = _truncated(response)
+    intentos = len(_RETRY_WAITS) + 1
+    ultimo: Exception | None = None
 
-    except Exception as error:  # noqa: BLE001
+    for intento in range(intentos):
+        try:
+            response = llamar()
+            texto = (response.text or "").strip()
+            cortado = _truncated(response)
+            ultimo = None
+            break
+        except Exception as error:  # noqa: BLE001
+            ultimo = error
+
+            if intento + 1 >= intentos or not _retryable(error):
+                break
+
+            espera = _RETRY_WAITS[intento]
+
+            logger.info(
+                "Gemini falló (%s); reintento %d de %d en %.0f s.",
+                type(error).__name__,
+                intento + 2,
+                intentos,
+                espera,
+            )
+            time.sleep(espera)
+
+    if ultimo is not None:
         # El mensaje de error de un SDK puede traer la URL con la clave.
         # Al log va completo; hacia arriba va algo que se puede mostrar.
-        logger.warning("Gemini falló: %s", error, exc_info=True)
+        logger.warning("Gemini falló: %s", ultimo, exc_info=True)
         raise SummaryUnavailable(
-            _explain(error, settings.gemini_model)
-        ) from error
+            _explain(ultimo, settings.gemini_model)
+        ) from ultimo
 
     if cortado:
         raise SummaryUnavailable(

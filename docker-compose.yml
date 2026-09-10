@@ -53,6 +53,8 @@ services:
       # Sin secreto el servicio arranca pero rechaza todo inicio de sesión.
       JWT_SECRET: ${JWT_SECRET:?falta JWT_SECRET en el .env}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      GEMINI_TIMEOUT: ${GEMINI_TIMEOUT:-60}
 
       # Explícito y no "*": en un contenedor que se va a desplegar de verdad,
       # dejar el comodín significa que cualquier página web puede llamar a

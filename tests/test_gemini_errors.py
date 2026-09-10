@@ -10,7 +10,11 @@ Esto no llegó como hipótesis: `gemini-2.5-flash` fue retirado por Google y
 "Analizar el caso" empezó a fallar con un mensaje que no decía nada.
 """
 
-from services.vision_service.app.ai.gemini import _explain, _truncated
+from services.vision_service.app.ai.gemini import (
+    _explain,
+    _retryable,
+    _truncated,
+)
 
 MODELO = "gemini-flash-latest"
 
@@ -112,3 +116,36 @@ class TestRespuestaCortada:
 
     def test_sin_el_campo_tampoco(self):
         assert not _truncated(object())
+
+
+class TestReintentos:
+    """
+    Cuándo insistir solo y cuándo no.
+
+    Google devuelve 503 de forma intermitente y el siguiente intento suele
+    pasar: que insista el servicio y no el operario a base de clics. Pero
+    insistir tiene coste —el agente espera— así que solo donde sirve.
+    """
+
+    def test_reintenta_un_error_del_servidor(self):
+        for code in (500, 502, 503, 504):
+            assert _retryable(ErrorDeApi(code)), code
+
+    def test_reintenta_un_fallo_de_conexion(self):
+        class ConnectError(Exception):
+            pass
+
+        assert _retryable(ConnectError())
+
+    def test_no_reintenta_un_timeout(self):
+        # Ya esperó un minuto; volver a intentarlo solo multiplica la espera.
+        class ReadTimeout(Exception):
+            pass
+
+        assert not _retryable(ReadTimeout())
+
+    def test_no_reintenta_lo_permanente(self):
+        # Un modelo retirado o una clave mala no se arreglan insistiendo, y
+        # con la cuota agotada insistir la empeora.
+        for code in (401, 403, 404, 429):
+            assert not _retryable(ErrorDeApi(code)), code
