@@ -187,6 +187,12 @@ class Settings:
         default_factory=lambda: _env_bool("VISION_LOOP_SOURCE", False)
     )
 
+    pace_lead_seconds: float = field(
+        default_factory=lambda: max(
+            0.0, _env_float("VISION_PACE_LEAD_SECONDS", 5.0)
+        )
+    )
+
     cors_origins: list[str] = field(default_factory=_cors_origins)
 
     # ------------------------------------------------------------------
@@ -395,6 +401,7 @@ class Settings:
             "frame_stride": self.frame_stride,
             "max_sessions": self.max_sessions,
             "loop_source": self.loop_source,
+            "pace_lead_seconds": self.pace_lead_seconds,
             "cors_origins": self.cors_origins,
             "evidence_enabled": self.evidence_enabled,
             "evidence_dir": str(self.evidence_dir),

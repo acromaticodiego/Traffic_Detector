@@ -91,3 +91,38 @@ class TestCierre:
 
         assert message["type"] == "error"
         assert message["code"] == "source_lost"
+
+
+class TestRitmoConVentaja:
+    """
+    El limitador tiene que correr ADELANTADO, no al día.
+
+    Sin ventaja el pipeline produce el frame N justo en el segundo N/fps, así
+    que nunca se adelanta y no hay colchón. El frontend, que sincroniza el
+    video con la frontera de inferencia, alcanza esa frontera al menor
+    tropiezo y pausa el video: el operario ve un tartamudeo constante.
+    """
+
+    def test_sin_ventaja_va_al_dia(self):
+        # Frame 300 a 30 fps = segundo 10 del video. Si van 4 s de reloj,
+        # hay que esperar 6.
+        assert archivo(fps=30.0).pace_delay(300, elapsed=4.0) == 6.0
+
+    def test_con_ventaja_se_adelanta(self):
+        # Con 5 s de ventaja, ese mismo frame sale en el segundo 5.
+        assert archivo(fps=30.0).pace_delay(300, elapsed=4.0, lead=5.0) == 1.0
+
+    def test_mientras_construye_la_ventaja_no_frena(self):
+        # Al arrancar corre suelto hasta ponerse por delante.
+        assert archivo(fps=30.0).pace_delay(30, elapsed=0.5, lead=5.0) == 0.0
+
+    def test_si_va_atrasado_no_espera(self):
+        # La GPU no da abasto: se queda atrás, que es lo honesto, en vez de
+        # fingir que va al día.
+        assert archivo(fps=30.0).pace_delay(300, elapsed=60.0) == 0.0
+
+    def test_a_una_camara_en_vivo_no_se_le_marca_el_ritmo(self):
+        assert vivo(fps=30.0).pace_delay(300, elapsed=0.0, lead=5.0) == 0.0
+
+    def test_sin_fps_no_divide_por_cero(self):
+        assert archivo(fps=0.0).pace_delay(300, elapsed=0.0) == 0.0

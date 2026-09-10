@@ -69,6 +69,7 @@ class VideoSession:
         self._loop = loop
         self._camera = camera
         self._stride = max(1, stride or settings.frame_stride)
+        self._lead = settings.pace_lead_seconds
 
         # El motor se construye en open(), no aquí: necesita los fps del
         # video para poder expresar el TTC en segundos, y esos no se conocen
@@ -394,30 +395,17 @@ class VideoSession:
             subscriber.push(message)
 
     def _pace(self, frame_id: int, started: float) -> None:
-        """
-        Esperar a que el reloj alcance al video.
-
-        Hasta ahora el ritmo lo marcaba, de rebote, la cola del navegador: el
-        hilo se bloqueaba al llenarse. Sin eso, un archivo se procesaría tan
-        rápido como dé la GPU y el operario vería la calle en cámara rápida.
-
-        Una fuente en vivo se marca su propio ritmo, porque `cap.read()` ya
-        espera al siguiente frame; ahí esta cuenta no llega a esperar nunca.
-        Y si la GPU no da abasto tampoco espera: se queda atrás, que es lo
-        honesto, en vez de fingir que va al día.
-        """
-
-        if self.fps <= 0 or self._playback is None:
+        if self._playback is None:
             return
 
-        if not self._playback.paced:
-            return
+        delay = self._playback.pace_delay(
+            frame_id,
+            time.monotonic() - started,
+            self._lead,
+        )
 
-        ahead = (started + frame_id / self.fps) - time.monotonic()
-
-        if ahead > 0:
-            # `wait` y no `sleep` para que parar la sesión sea inmediato.
-            self._stop.wait(timeout=ahead)
+        if delay > 0:
+            self._stop.wait(timeout=delay)
 
     def _rewind(self, cap: cv2.VideoCapture) -> bool:
         """

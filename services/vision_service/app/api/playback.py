@@ -89,6 +89,19 @@ class Playback:
 
         return pass_frame / self.fps
 
+    def pace_delay(
+        self,
+        frame_id: int,
+        elapsed: float,
+        lead: float = 0.0,
+    ) -> float:
+        """Segundos que hay que esperar antes de producir este frame."""
+
+        if not self.paced or self.fps <= 0:
+            return 0.0
+
+        return max(0.0, (frame_id / self.fps) - lead - elapsed)
+
     def end_message(self, frames: int, processed: int) -> dict[str, Any]:
         """
         Cómo se cierra la sesión cuando la fuente deja de dar frames.
