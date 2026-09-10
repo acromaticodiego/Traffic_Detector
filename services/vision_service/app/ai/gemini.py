@@ -114,6 +114,23 @@ Habla de lo que es "consistente con" o "poco compatible con" un choque.
 """
 
 
+def _truncated(response: Any) -> bool:
+    """
+    Si el modelo se quedó sin presupuesto a media frase.
+
+    Un texto cortado NO es un resumen a medias que sirva igual: se guarda en
+    la base y se muestra como si fuera la lectura del caso. Es peor que no
+    tener nada, porque parece un análisis y no lo es.
+    """
+
+    try:
+        reason = response.candidates[0].finish_reason
+    except (AttributeError, IndexError, TypeError):
+        return False
+
+    return reason is not None and str(reason).endswith("MAX_TOKENS")
+
+
 def _describe(incident: dict[str, Any]) -> str:
     """Los datos del incidente, en texto plano para el prompt."""
 
@@ -226,6 +243,7 @@ def generate(incident: dict[str, Any], image: Optional[Path] = None) -> str:
         )
 
         texto = (response.text or "").strip()
+        cortado = _truncated(response)
 
     except Exception as error:  # noqa: BLE001
         # El mensaje de error de un SDK puede traer la URL con la clave.
@@ -234,6 +252,12 @@ def generate(incident: dict[str, Any], image: Optional[Path] = None) -> str:
         raise SummaryUnavailable(
             _explain(error, settings.gemini_model)
         ) from error
+
+    if cortado:
+        raise SummaryUnavailable(
+            "El modelo se quedó sin espacio y devolvió la lectura a medias. "
+            "No se guarda un texto cortado: vuelve a intentarlo."
+        )
 
     if not texto:
         raise SummaryUnavailable(

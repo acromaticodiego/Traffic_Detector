@@ -10,7 +10,7 @@ Esto no llegó como hipótesis: `gemini-2.5-flash` fue retirado por Google y
 "Analizar el caso" empezó a fallar con un mensaje que no decía nada.
 """
 
-from services.vision_service.app.ai.gemini import _explain
+from services.vision_service.app.ai.gemini import _explain, _truncated
 
 MODELO = "gemini-flash-latest"
 
@@ -75,3 +75,40 @@ class TestNoFiltrarLaClave:
 
         assert secreto not in mensaje
         assert "https://" not in mensaje
+
+
+class TestRespuestaCortada:
+    """
+    Un texto cortado no es un resumen a medias que sirva igual.
+
+    Se guarda en la base y se muestra como la lectura del caso, así que
+    parece un análisis sin serlo. Eso ya pasó: con el límite de tokens que
+    había, el modelo gastaba el presupuesto razonando y lo que se cacheaba
+    era un fragmento como '). * Sudden braking/change: "'.
+    """
+
+    def respuesta(self, reason, texto="algo"):
+        class Candidate:
+            finish_reason = reason
+
+        class Response:
+            candidates = [Candidate()]
+            text = texto
+
+        return Response()
+
+    def test_detecta_que_se_quedo_sin_espacio(self):
+        assert _truncated(self.respuesta("FinishReason.MAX_TOKENS"))
+
+    def test_una_respuesta_completa_no_lo_esta(self):
+        assert not _truncated(self.respuesta("FinishReason.STOP"))
+
+    def test_sin_candidatos_no_revienta(self):
+        class Vacia:
+            candidates = []
+            text = ""
+
+        assert not _truncated(Vacia())
+
+    def test_sin_el_campo_tampoco(self):
+        assert not _truncated(object())
