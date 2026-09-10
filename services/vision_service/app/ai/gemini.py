@@ -219,7 +219,6 @@ def generate(incident: dict[str, Any], image: Optional[Path] = None) -> str:
                 # redacción creativa. Interesa que dos lecturas del mismo
                 # incidente digan lo mismo.
                 temperature=0.2,
-                max_output_tokens=400,
                 http_options=types.HttpOptions(
                     timeout=int(settings.gemini_timeout * 1000)
                 ),
