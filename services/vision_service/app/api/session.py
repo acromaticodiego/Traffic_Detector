@@ -22,6 +22,7 @@ frames, y el ritmo lo marca el reloj (ver `_pace`).
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import math
 import threading
@@ -69,7 +70,14 @@ class VideoSession:
         self._loop = loop
         self._camera = camera
         self._stride = max(1, stride or settings.frame_stride)
-        self._lead = settings.pace_lead_seconds
+        self._stream_frames = settings.stream_frames
+
+        # Mandando los frames, el ritmo al que salen ES la reproducción: una
+        # ventaja haría que el cliente los pinte en cámara rápida y luego se
+        # quede congelado. La ventaja solo sirve cuando el cliente reproduce
+        # el video por su cuenta y hay dos relojes que sincronizar.
+        self._lead = 0.0 if self._stream_frames else settings.pace_lead_seconds
+        self._stream_quality = settings.stream_quality
 
         # El motor se construye en open(), no aquí: necesita los fps del
         # video para poder expresar el TTC en segundos, y esos no se conocen
@@ -190,6 +198,7 @@ class VideoSession:
             "width": self.width,
             "height": self.height,
             "stride": self._stride,
+            "streams_frames": self._stream_frames,
             "traffic_thresholds": {
                 "medium": self._camera.occupancy_medium,
                 "high": self._camera.occupancy_high,
@@ -394,6 +403,21 @@ class VideoSession:
         for subscriber in targets:
             subscriber.push(message)
 
+    def _encoded(self, frame) -> Optional[str]:
+        if not self._stream_frames:
+            return None
+
+        ok, buffer = cv2.imencode(
+            ".jpg",
+            frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), self._stream_quality],
+        )
+
+        if not ok:
+            return None
+
+        return base64.b64encode(buffer).decode("ascii")
+
     def _pace(self, frame_id: int, started: float) -> None:
         if self._playback is None:
             return
@@ -518,6 +542,7 @@ class VideoSession:
                         "type": "frame",
                         "frame_id": frame_id,
                         "t": round(t, 3),
+                        "image": self._encoded(frame),
                         "tracks": tracks_payload,
                         "incidents": incidents_payload,
                         "events": events_payload,

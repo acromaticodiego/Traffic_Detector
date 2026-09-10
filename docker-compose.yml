@@ -63,6 +63,8 @@ services:
       VISION_FRAME_STRIDE: ${VISION_FRAME_STRIDE:-1}
       VISION_LOOP_SOURCE: ${VISION_LOOP_SOURCE:-0}
       VISION_PACE_LEAD_SECONDS: ${VISION_PACE_LEAD_SECONDS:-5}
+      VISION_STREAM_FRAMES: ${VISION_STREAM_FRAMES:-1}
+      VISION_STREAM_QUALITY: ${VISION_STREAM_QUALITY:-70}
 
       # Habeas Data. La anonimización va encendida; el plazo de retención hay
       # que fijarlo a conciencia, y 0 significa conservar indefinidamente.

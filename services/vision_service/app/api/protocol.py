@@ -15,6 +15,8 @@ Historial:
     2 -> ocupación de calzada + velocidad, ROI por cámara, meta.camera
     3 -> multi-cámara: meta.frame_count puede ser null (fuente en vivo, que
          no tiene final que contar)
+    4 -> el servicio manda el frame ya procesado dentro del mensaje, en
+         `frame.image`. El cliente deja de necesitar el archivo de video.
 """
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4

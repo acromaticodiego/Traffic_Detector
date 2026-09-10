@@ -187,6 +187,16 @@ class Settings:
         default_factory=lambda: _env_bool("VISION_LOOP_SOURCE", False)
     )
 
+    stream_frames: bool = field(
+        default_factory=lambda: _env_bool("VISION_STREAM_FRAMES", True)
+    )
+
+    stream_quality: int = field(
+        default_factory=lambda: min(
+            95, max(30, _env_int("VISION_STREAM_QUALITY", 70))
+        )
+    )
+
     pace_lead_seconds: float = field(
         default_factory=lambda: max(
             0.0, _env_float("VISION_PACE_LEAD_SECONDS", 5.0)
@@ -402,6 +412,8 @@ class Settings:
             "max_sessions": self.max_sessions,
             "loop_source": self.loop_source,
             "pace_lead_seconds": self.pace_lead_seconds,
+            "stream_frames": self.stream_frames,
+            "stream_quality": self.stream_quality,
             "cors_origins": self.cors_origins,
             "evidence_enabled": self.evidence_enabled,
             "evidence_dir": str(self.evidence_dir),
