@@ -7,6 +7,7 @@ websockets>=13            # required by uvicorn for WebSocket support
 
 # Vision pipeline
 ultralytics==8.4.129
+lap==0.5.13               # ByteTrack; ultralytics lo instala en caliente si falta
 opencv-python==5.0.0.93
 torch==2.11.0
 torchvision==0.26.0
