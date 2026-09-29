@@ -3,8 +3,6 @@ from pathlib import Path
 import cv2
 
 from services.vision_service.app.detection.colors import (
-    CLASS_COLORS,
-    DEFAULT_COLOR,
     get_class_color,
     get_text_color,
 )

@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "services" / "vision_service"))
 
 from app.api.config import settings  # noqa: E402
 from app.db.base import Base  # noqa: E402
-from app.db import models  # noqa: E402,F401  (registra las tablas)
+from app.db import models  # noqa: E402, F401 -- registra las tablas
 
 config = context.config
 

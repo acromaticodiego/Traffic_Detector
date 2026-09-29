@@ -1,5 +1,3 @@
-import pytest
-
 from services.vision_service.app.detection.colors import (
     CLASS_COLORS,
     DEFAULT_COLOR,
@@ -10,6 +8,13 @@ from services.vision_service.app.detection.colors import (
 
 
 class TestClassColors:
+
+    def test_paletas_definidas_y_no_vacias(self):
+        """Comprueba que las paletas globales estén definidas y pobladas."""
+        assert isinstance(CLASS_COLORS, dict)
+        assert len(CLASS_COLORS) > 0
+        assert isinstance(FALLBACK_PALETTE, list)
+        assert len(FALLBACK_PALETTE) > 0
 
     def test_clases_principales_tienen_colores_distintos(self):
         """Verifica que cada clase de vehículo y actor vial tenga un color único."""
@@ -52,8 +57,10 @@ class TestClassColors:
         ]
 
         for eng, esp in pairs:
-            assert get_class_color(eng) == get_class_color(esp), (
-                f"Color para '{eng}' ({get_class_color(eng)}) no coincide con '{esp}' ({get_class_color(esp)})"
+            c_eng = get_class_color(eng)
+            c_esp = get_class_color(esp)
+            assert c_eng == c_esp, (
+                f"Color para '{eng}' ({c_eng}) no coincide con '{esp}' ({c_esp})"
             )
 
     def test_normalizacion_de_casing_y_espacios(self):
@@ -85,4 +92,3 @@ class TestClassColors:
         # Negro o azul oscuro -> texto blanco
         assert get_text_color((0, 0, 0)) == (255, 255, 255)
         assert get_text_color((255, 0, 0)) == (255, 255, 255)
-
