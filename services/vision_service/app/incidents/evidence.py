@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 
+from ..detection.colors import get_class_color, get_text_color
 from ..detection.schemas import Detection
 from ..tracking.track_state import TrackState
 from .anonymize import (
@@ -177,6 +178,8 @@ class IncidentEvidence:
             x2 = int(track.x2)
             y2 = int(track.y2)
 
+            color = get_class_color(track.class_name)
+
             # ----------------------------------------------
             # Bounding box
             # ----------------------------------------------
@@ -185,7 +188,7 @@ class IncidentEvidence:
                 annotated,
                 (x1, y1),
                 (x2, y2),
-                (0, 0, 255),
+                color,
                 3,
             )
 
@@ -198,16 +201,36 @@ class IncidentEvidence:
                 f"ID:{track.track_id}"
             )
 
+            (text_width, text_height), baseline = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                2,
+            )
+
+            label_y = max(
+                y1 - 10,
+                text_height + 10,
+            )
+
+            # Fondo de la etiqueta con el color de la clase
+            cv2.rectangle(
+                annotated,
+                (x1, label_y - text_height - baseline - 4),
+                (x1 + text_width + 6, label_y + 4),
+                color,
+                -1,
+            )
+
+            text_color = get_text_color(color)
+
             cv2.putText(
                 annotated,
                 label,
-                (
-                    x1,
-                    max(y1 - 10, 20),
-                ),
+                (x1 + 3, label_y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 0, 255),
+                0.6,
+                text_color,
                 2,
             )
 
@@ -230,7 +253,7 @@ class IncidentEvidence:
                     center_y,
                 ),
                 5,
-                (0, 0, 255),
+                color,
                 -1,
             )
 

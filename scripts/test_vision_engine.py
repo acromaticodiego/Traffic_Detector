@@ -2,6 +2,12 @@ from pathlib import Path
 
 import cv2
 
+from services.vision_service.app.detection.colors import (
+    CLASS_COLORS,
+    DEFAULT_COLOR,
+    get_class_color,
+    get_text_color,
+)
 from services.vision_service.app.detection.detector import YOLODetector
 
 from services.vision_service.app.tracking.tracker import (
@@ -71,39 +77,22 @@ OUTPUT_VIDEO = (
 
 
 # ============================================================
-# CLASS COLORS
+# ============================================================
+# CLASS COLORS (BGR para OpenCV)
 # ============================================================
 #
-# OpenCV uses BGR:
+# Cada etiqueta / clase tiene un color único y de alto contraste:
 #
-# Blue      = (255, 0, 0)
-# Green     = (0, 255, 0)
-# Red       = (0, 0, 255)
-# Cyan      = (255, 255, 0)
-# Yellow    = (0, 255, 255)
-# Magenta   = (255, 0, 255)
-# Orange    = (0, 165, 255)
+# Azul Real (Carro / Car)           = (255, 100, 0)
+# Naranja Vivo (Moto / Motorcycle)  = (0, 140, 255)
+# Magenta / Fucsia (Camión / Truck) = (255, 0, 255)
+# Amarillo Vivo (Bus)               = (0, 235, 255)
+# Rojo Carmesí (Ambulancia)         = (40, 40, 245)
+# Verde Lima (Ciclista)             = (50, 220, 50)
+# Morado / Violeta (Patineta)       = (220, 80, 160)
+# Cian / Turquesa (Peatón)          = (255, 255, 0)
 #
 # ============================================================
-
-CLASS_COLORS = {
-
-    "car": (255, 0, 0),
-
-    "motorcycle": (0, 165, 255),
-
-    "truck": (255, 0, 255),
-
-    "bus": (0, 255, 255),
-
-    "pedestrian": (0, 0, 255),
-
-    "ciclist": (255, 255, 0),
-
-}
-
-
-DEFAULT_COLOR = (0, 255, 0)
 
 
 # ============================================================
@@ -128,13 +117,10 @@ def draw_tracks(
         y2 = int(track.y2)
 
         # ----------------------------------------------------
-        # Color according to class
+        # Color according to class / label
         # ----------------------------------------------------
 
-        color = CLASS_COLORS.get(
-            track.class_name,
-            DEFAULT_COLOR,
-        )
+        color = get_class_color(track.class_name)
 
         # ----------------------------------------------------
         # Bounding box
@@ -193,13 +179,15 @@ def draw_tracks(
         # Label text
         # ----------------------------------------------------
 
+        text_color = get_text_color(color)
+
         cv2.putText(
             frame,
             label,
             (x1 + 2, label_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
-            (255, 255, 255),
+            text_color,
             2,
         )
 
